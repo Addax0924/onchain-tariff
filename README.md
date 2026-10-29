@@ -4,7 +4,9 @@ English · [中文](README.zh.md)
 
 ## Protocol summary
 
-Onchain Tariff Market applies a dynamic tariff to net selling surplus. As a seller's surplus rises, the protocol retains part of new sale proceeds. Later purchases by the same participant reduce that historical surplus and return held funds as the taxable surplus falls. Once both ordinary and deferred surplus reach zero, no tariff remains due: eligible purchases offset payments, and any held balance not yet refunded is returned in full to the Merchant when the account completes withdrawal.
+Onchain Tariff Market is a decentralized on-chain marketplace that uses dynamic tariffs and governance by both buyers and sellers to keep funds circulating.
+
+The protocol applies a dynamic tariff to net selling surplus. As a seller's surplus rises, it retains part of new sale proceeds. Later purchases by the same participant reduce that historical surplus and return held funds as the taxable surplus falls. Once both ordinary and deferred surplus reach zero, no tariff remains due: eligible purchases offset payments, and any held balance not yet refunded is returned in full to the Merchant when the account completes withdrawal.
 
 Each trade pays a rights fee of about 1% to the public Vault and mints non-transferable governance seats for the buyer and seller sides. Seats become active in the next round; both sides vote on market entry rules, account eviction, and the use of shared funds.
 
