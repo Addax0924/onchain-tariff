@@ -87,3 +87,7 @@ forge test
 `script/Deploy.s.sol` shows the full proxy, dual-election, Timelock, Governor, Market, Vault, executor, and permission-transfer path. `script/DeployMock.s.sol` deploys a local six-decimal test token. The deployment script reads a private key and settlement-token address and writes contract addresses to `.env`; review the target chain and environment before running it. `script/Interact.s.sol` is currently a commented-out legacy example and is not an interface guide.
 
 Source, interfaces, and tests define the behavior; this README is a starting point. The current implementation is an independent, single-token Market without a multi-token router or surplus holding fee.
+
+## 5. Disclaimer
+
+This code has not been audited. It is experimental software provided "as is", without warranty of any kind, as stated in the [MIT License](LICENSE). The authors and contributors accept no liability for any loss, damage, or other consequence arising from deploying, operating, or interacting with these contracts, including loss of funds, contract vulnerabilities, misconfiguration, or governance actions. Anyone who deploys or uses this code does so at their own risk and is responsible for independent security review, testing, and compliance with the laws and regulations that apply to them. Nothing in this repository is financial, legal, or investment advice.
