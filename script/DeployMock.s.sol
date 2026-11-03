@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 import "forge-std/console.sol";
+import "./EnvFile.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 // --- 把 Mock 合约直接定义在脚本文件里 ---
@@ -21,7 +22,7 @@ contract MockUSDC is ERC20 {
 }
 
 // --- 部署脚本 ---
-contract DeployMock is Script {
+contract DeployMock is EnvFile {
     function run() external {
         // 从环境变量读取私钥
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -43,9 +44,13 @@ contract DeployMock is Script {
         console.log("Mock USDC Address:", address(usdc));
         console.log("Status: 1,000,000 USDC minted to deployer");
         console.log("======================================");
-        console.log(
-            "Next step: Copy the address above to your .env as USDC_ADDRESS"
-        );
+
+        // 写回 .env，供 Deploy.s.sol 读取 USDC_ADDRESS
+        string memory path = ".env";
+        string memory env = vm.readFile(path);
+        env = _upsertEnvAddress(env, "USDC_ADDRESS", address(usdc));
+        vm.writeFile(path, env);
+        console.log("Updated .env USDC_ADDRESS");
     }
 }
 
