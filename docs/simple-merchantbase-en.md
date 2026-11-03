@@ -59,7 +59,7 @@ function _tradeIn(
 }
 ```
 
-`netAmount = amount - floor(amount / 100)` is the sale's trade value. `deltaW` is the token amount actually received by the proxy and may be smaller because of seller tariff. A failed hook reverts the whole Market trade. The base does not keep buckets by `rechargeTarget` or track customers and creator entitlements.
+`netAmount = amount - floor(amount / 100)` is the sale's trade value. `deltaW` is the token amount actually received by the proxy and may be smaller because of seller retention. A failed hook reverts the whole Market trade. The base does not keep buckets by `rechargeTarget` or track customers and creator entitlements.
 
 ## 4. Fixed-share payouts
 
@@ -70,7 +70,7 @@ ownerAvailable    = floor(received × ownerShareBps / 10000) - ownerReleased
 businessAvailable = floor(received × businessShareBps / 10000) - businessReleased
 ```
 
-For `received = 99` smallest units and `4000 / 6000` shares, the current owner and business limits are 39 and 59 units. Rounding remainder cannot be spent twice. Allowance decreases by the full payout `amount`, not the amount paid after a tariff refund or the destination Merchant's `deltaW`.
+For `received = 99` smallest units and `4000 / 6000` shares, the current owner and business limits are 39 and 59 units. Rounding remainder cannot be spent twice. Allowance decreases by the full payout `amount`, not the amount paid after a retention refund or the destination Merchant's `deltaW`.
 
 Account Owner or the configured business address calls:
 
@@ -85,9 +85,9 @@ simpleMerchant.tradeOut(
 
 The base supplies its fixed `accountOwner` and pinned buyer account ID. The caller does not repeat `buyer` or `buyerAccountId`. **There is no ID-zero source-account path here**: the platform is the buyer Merchant and must use an active source account. The destination seller must also be active and satisfy Market's tier-flow rule.
 
-Only the fixed Account Owner spends the owner share; only the current `business()` address spends the business share. The base approves SettlementAsset for the full `amount` from the proxy's underlying balance, then calls Market. Because the proxy is the buyer account's Merchant, eligible held tariff may offset this payment, while the 1% rights fee remains payable. Approval is cleared afterward. A Market or destination failure also reverts the `released` update.
+Only the fixed Account Owner spends the owner share; only the current `business()` address spends the business share. The base approves SettlementAsset for the full `amount` from the proxy's underlying balance, then calls Market. Because the proxy is the buyer account's Merchant, eligible retained funds may offset this payment, while the 1% rights fee remains payable. Approval is cleared afterward. A Market or destination failure also reverts the `released` update.
 
-`received` is an economic allowance, not the proxy's live ERC20 balance: some trade value may still be held as tariff in SettlementAsset. The business layer should check immediate liquidity and the upstream party's entitlement before paying.
+`received` is an economic allowance, not the proxy's live ERC20 balance: some trade value may still be held as retained funds in SettlementAsset. The business layer should check immediate liquidity and the upstream party's entitlement before paying.
 
 ## 5. Administration and lifecycle
 

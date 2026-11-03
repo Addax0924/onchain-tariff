@@ -54,6 +54,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     mapping(uint256 => MarketAccount) public accounts;
     mapping(address => mapping(address => uint256)) public accountIdOf;
 
+    // Retained, still-refundable sale proceeds per account (historical name).
     mapping(uint256 => uint256) public sellerPoints;
     mapping(uint256 => uint256) public claimed;
     mapping(uint256 => int256) public netTradeBalance;
@@ -64,6 +65,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     uint256 public resolutionRatio;
     uint256 public resolutionIndex;
     uint256 public resolutionIndexUpdatedAt;
+    // Base retention rate in BPS. "Tax" names are historical; retention is refundable, not a tax.
     uint256 public baseTaxRate;
     uint256 public curveExponent;
 
@@ -113,6 +115,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         int256 newMerchantBalance
     );
     event TradeBalanceUpdated(uint256 indexed accountId, int256 netTradeBalance);
+    // Retained funds returned to the account's Merchant (by purchase offset, withdrawal, or kick).
     event TaxRefunded(uint256 indexed accountId, uint256 amount);
     event MerchantKicked(
         uint256 indexed accountId,
@@ -195,6 +198,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         return buyerAccountId;
     }
 
+    // Target cumulative retention for retainable surplus P.
     function curveTax(uint256 P, uint256 deposit, uint256 capacityMultiplier) external view returns (uint256) {
         return _curveTax(P, deposit, capacityMultiplier);
     }
@@ -208,6 +212,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         return current;
     }
 
+    // Retainable Surplus: positive real balance plus current deferred surplus.
     function taxableSurplus(uint256 accountId) public view returns (uint256) {
         return _positive(netTradeBalance[accountId]) + deferredSurplus(accountId);
     }
@@ -586,7 +591,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         uint256 surplus = taxableSurplus(accountId);
         uint256 slashedAmount = surplus < heldAmount ? surplus : heldAmount;
 
-        // Deposit is the account's collateral; preserve refundable merchant tariff until collateral is exhausted.
+        // Deposit is the account's collateral; preserve refundable merchant retention until collateral is exhausted.
         uint256 slashedDeposit = depositAmount < slashedAmount ? depositAmount : slashedAmount;
         uint256 ownerRefund = depositAmount - slashedDeposit;
         uint256 merchantRefund = tariffAmount - (slashedAmount - slashedDeposit);
@@ -641,7 +646,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     }
 
     function setGlobalAMMParams(uint256 _baseTaxRate, uint256 _curveExponent) external onlyOwner {
-        require(_baseTaxRate <= BPS, "Invalid base tax rate");
+        require(_baseTaxRate <= BPS, "Invalid base retention rate");
         require(_curveExponent > 0, "Invalid curve exponent");
         require(_curveExponent <= MAX_CURVE_EXPONENT, "Curve exponent too high");
         baseTaxRate = _baseTaxRate;

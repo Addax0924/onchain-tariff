@@ -59,7 +59,7 @@ function _tradeIn(
 }
 ```
 
-`netAmount = amount - floor(amount / 100)` 是本次销售的交易值；`deltaW` 是实际转入代理的代币，可能因关税而更少。业务钩子失败会回滚整笔 Market 交易。基类不按 `rechargeTarget` 记账，也不维护客户或创作者余额。
+`netAmount = amount - floor(amount / 100)` 是本次销售的交易值；`deltaW` 是实际转入代理的代币，可能因暂扣而更少。业务钩子失败会回滚整笔 Market 交易。基类不按 `rechargeTarget` 记账，也不维护客户或创作者余额。
 
 ## 4. 固定比例出款
 
@@ -70,7 +70,7 @@ ownerAvailable    = floor(received × ownerShareBps / 10000) - ownerReleased
 businessAvailable = floor(received × businessShareBps / 10000) - businessReleased
 ```
 
-例如 `received = 99` 个最小单位、比例为 `4000 / 6000`，两侧当前上限分别是 39 和 59 个单位。向下取整的余数不会被双方重复花费。额度按完整出款 `amount` 扣减，不按退税后的实际付款或目标商家的 `deltaW` 扣减。
+例如 `received = 99` 个最小单位、比例为 `4000 / 6000`，两侧当前上限分别是 39 和 59 个单位。向下取整的余数不会被双方重复花费。额度按完整出款 `amount` 扣减，不按暂扣款抵扣后的实际付款或目标商家的 `deltaW` 扣减。
 
 Account Owner 或配置的 business 调用：
 
@@ -85,9 +85,9 @@ simpleMerchant.tradeOut(
 
 基类固定使用自己的 `accountOwner` 和绑定的买方 accountId，不要求调用者重复传 `buyer` 和 `buyerAccountId`。**这里没有 ID 0 源账户路径**：平台作为买方 Merchant，必须使用已激活的源账户；目标卖方也必须已激活，并满足 Market 的乘数流向规则。
 
-只有固定 Account Owner 可花 owner 份额，只有当前 `business()` 地址可花 business 份额。基类用平台代理的 underlying 向 SettlementAsset 授权完整 `amount`，再调用 Market。因实际付款地址正是买方账户 Merchant，符合条件的已收关税可以抵扣本次付款，但 1% 权利费用仍须支付。调用结束后清除授权。若 Market 或目标 Merchant 回滚，`released` 更新也回滚。
+只有固定 Account Owner 可花 owner 份额，只有当前 `business()` 地址可花 business 份额。基类用平台代理的 underlying 向 SettlementAsset 授权完整 `amount`，再调用 Market。因实际付款地址正是买方账户 Merchant，符合条件的已暂扣款可以抵扣本次付款，但 1% 权利费用仍须支付。调用结束后清除授权。若 Market 或目标 Merchant 回滚，`released` 更新也回滚。
 
-`received` 是经济额度，不等于代理当前可用的 ERC20 余额；关税可能仍留在 SettlementAsset。业务方应在发起上游付款前检查实际流动性和上游应得金额。
+`received` 是经济额度，不等于代理当前可用的 ERC20 余额；暂扣款可能仍留在 SettlementAsset。业务方应在发起上游付款前检查实际流动性和上游应得金额。
 
 ## 5. 管理与生命周期
 

@@ -10,10 +10,10 @@
 | --- | --- |
 | 合约管理员 `owner()` | 维护白名单、`business`、Executor，并授权基类代理升级；不会因此自动获得 `tradeOut` 权限。 |
 | Account Owner | 注册 `(owner, 平台代理)` Market 账户，控制乘数，接收该账户的买卖权利。 |
-| Merchant | 此处是 **MerchantBase 代理地址**，接收销售实际到款，并作为买方调用 Market 以使用本账户可退关税。 |
+| Merchant | 此处是 **MerchantBase 代理地址**，接收销售实际到款，并作为买方调用 Market 以使用本账户可退暂扣款。 |
 | `business()` | 平台业务执行地址，可使用 business 释放桶；不是目标收款人，也不是所有账户的 owner。 |
 
-一份平台代理可服务多个 Account Owner。每个 `(owner, proxy)` 配对都有独立的 Market accountId、押金、净余额和关税；同一乘数的业务流量则可以在 business 桶汇总。`rechargeTarget` 是由目标 Merchant 解释的 `uint160` 业务标识，基类不会按它建立持久销售桶。
+一份平台代理可服务多个 Account Owner。每个 `(owner, proxy)` 配对都有独立的 Market accountId、押金、净余额和暂扣款；同一乘数的业务流量则可以在 business 桶汇总。`rechargeTarget` 是由目标 Merchant 解释的 `uint160` 业务标识，基类不会按它建立持久销售桶。
 
 ## 2. 初始化并注册 Market 账户
 
@@ -43,7 +43,7 @@ uint256 accountId = market.registerMerchant(address(platformProxy), deposit, mul
 
 注册调用者必须就是 Account Owner；押金大于零，乘数至少 1000。`market.accountIdOf(accountOwner, address(platformProxy))` 可查 accountId，`market.accounts(accountId)` 可查 owner、merchant、押金、乘数与激活状态。Market 注册和 MerchantBase 支持名单是两层条件：账户已激活但 owner 未受支持，平台收款回调仍会回滚。
 
-任何人可调用 `Market.addDeposit(accountId, amount)` 为已激活账户全额增押；这不增加 MerchantBase 的 `received`，也不会即时退还关税。只有 Account Owner 可通过 `setCapacityMultiplier` 保持或降低乘数。基类按当前乘数入桶，**不会**迁移旧乘数桶；接入方应在业务上协调乘数变化。
+任何人可调用 `Market.addDeposit(accountId, amount)` 为已激活账户全额增押；这不增加 MerchantBase 的 `received`，也不会即时退还暂扣款。只有 Account Owner 可通过 `setCapacityMultiplier` 保持或降低乘数。基类按当前乘数入桶，**不会**迁移旧乘数桶；接入方应在业务上协调乘数变化。
 
 ## 3. 用户向平台付款：调用 Market.trade
 
@@ -62,7 +62,7 @@ market.trade(
 
 `buyer` 可以与实际 Payer 不同。`buyerAccountId = 0` 只让 Market 查找或创建 `(buyer, buyer)` 默认买方账户，**不会**自动选择买方在平台上的账户。首次使用未激活默认账户时须由买方本人付款；显式买方 ID 必须属于 `buyer`。卖方 ID 始终必须已激活，并决定本笔收入归哪个平台账户、卖方权利铸给哪个 owner。
 
-Market 先计算 `vaultFee = floor(amount / 100)`、`netAmount = amount - vaultFee`，再按卖方关税确定 `deltaW`。对 MerchantBase 而言：
+Market 先计算 `vaultFee = floor(amount / 100)`、`netAmount = amount - vaultFee`，再按卖方暂扣确定 `deltaW`。对 MerchantBase 而言：
 
 | 金额 | 含义 |
 | --- | --- |
@@ -70,12 +70,12 @@ Market 先计算 `vaultFee = floor(amount / 100)`、`netAmount = amount - vaultF
 | `netAmount` | 扣权利费用后的交易值，基类 `received` 桶增加此数。 |
 | `deltaW` | 实际转到平台代理的结算代币；可能小于 `netAmount`。 |
 
-所有金额均为 underlying 的最小单位；不能假定每种代币都是 6 位小数。Market 当前使用单一结算代币。第三方代付仍给买方账户记余额与权利，但不能动用该账户已收关税。
+所有金额均为 underlying 的最小单位；不能假定每种代币都是 6 位小数。Market 当前使用单一结算代币。第三方代付仍给买方账户记余额与权利，但不能动用该账户已暂扣款。
 
 执行顺序是：
 
 ```text
-Market 记余额、关税和权利
+Market 记余额、暂扣和权利
   → SettlementAsset 把 deltaW 转给平台代理
   → TradeExecutor 调用平台代理 tradeIn
   → 基类校验 owner 和账户、记录流量
@@ -130,7 +130,7 @@ businessAvailable =
     floor(businessReceived × businessShareBps / 10000) - businessReleased
 ```
 
-例如 `netAmount = 99` 个最小单位，比例为 `2000 / 8000`，owner 与 business 桶各记 `received = 99`，但两条路径最多分别释放 19 和 79 个单位；向下取整的余数会留到以后累计收入中。每个乘数桶分开计算，owner 不能用另一个 owner 的额度，business 可汇总同乘数的收入。`received` 不是平台代理的实时 ERC20 余额：部分 `netAmount` 可能仍作为关税留在 SettlementAsset；有额度也不保证立即有足够现金付款。
+例如 `netAmount = 99` 个最小单位，比例为 `2000 / 8000`，owner 与 business 桶各记 `received = 99`，但两条路径最多分别释放 19 和 79 个单位；向下取整的余数会留到以后累计收入中。每个乘数桶分开计算，owner 不能用另一个 owner 的额度，business 可汇总同乘数的收入。`received` 不是平台代理的实时 ERC20 余额：部分 `netAmount` 可能仍作为暂扣款留在 SettlementAsset；有额度也不保证立即有足够现金付款。
 
 查询 `accountOwnerFlow(owner, multiplier)`、`businessFlow(multiplier)` 得到原始累计值，再用 `releaseShares()` 计算可用额。
 
@@ -153,14 +153,14 @@ platform.tradeOut(
 
 调用者若等于 `business()`，优先消耗 business 桶；否则必须等于该源账户的 Account Owner，消耗该 owner 桶。合约管理员没有额外的 `tradeOut` 特权。business 可以选择任意受支持的平台源账户，但业务层必须自行核实创作者身份、应得金额和提现授权；基类只管聚合额度。
 
-基类先增加对应桶的 `released`，再用平台代理持有的 underlying 向 SettlementAsset 授权完整 `amount`，并以平台地址调用 `Market.trade`。这使 `msg.sender` 等于买方账户的 Merchant，故本账户若有符合条件的可退关税，可自动抵扣本次付款；退款不会单独打给外部调用者。`released` 总是记完整 `amount`，而非 `amount - refund` 或目标的 `deltaW`。Market 或目标回调失败时，授权、转账与桶记录都随交易回滚。
+基类先增加对应桶的 `released`，再用平台代理持有的 underlying 向 SettlementAsset 授权完整 `amount`，并以平台地址调用 `Market.trade`。这使 `msg.sender` 等于买方账户的 Merchant，故本账户若有符合条件的可退暂扣款，可自动抵扣本次付款；退款不会单独打给外部调用者。`released` 总是记完整 `amount`，而非 `amount - refund` 或目标的 `deltaW`。Market 或目标回调失败时，授权、转账与桶记录都随交易回滚。
 
 ## 7. 生命周期、管理与索引
 
 仅合约管理员可调用 `setAccountOwnerSupport`、`setBusiness` 和 `setTradeExecutor`。改变 business 地址会把既有 business 额度交给新地址，不会清空桶。Executor 是收款回调的信任入口，修改时须与 Market 配置协调。基类 UUPS 升级遵循 `onlyOwner`；升级旧代理前需单独审查存储布局和历史桶。
 
-Account Owner 可在 Market 中申请退押。申请后账户立即冻结，180 天后领取押金；残余关税归 Merchant，账户和配对映射删除。治理也可按账户 ID 踢出。**MerchantBase 的流量桶独立于 Market 生命周期**：退出或踢出不会清零桶；同一 owner–Merchant 配对重新注册取得新 ID 后，若仍使用相同乘数，会继续命中旧桶。业务系统须决定如何管理这份历史额度。
+Account Owner 可在 Market 中申请退押。申请后账户立即冻结，180 天后领取押金；残余暂扣款归 Merchant，账户和配对映射删除。治理也可按账户 ID 踢出。**MerchantBase 的流量桶独立于 Market 生命周期**：退出或踢出不会清零桶；同一 owner–Merchant 配对重新注册取得新 ID 后，若仍使用相同乘数，会继续命中旧桶。业务系统须决定如何管理这份历史额度。
 
-链下索引可关注 `SaleRecorded`、`AccountOwnerReleaseRecorded`、`BusinessReleaseRecorded`、`AccountOwnerSupportUpdated`、`ReleaseSharesConfigured`、`BusinessUpdated` 与 `TradeExecutorUpdated`。基类没有枚举所有 owner/乘数的接口；可从事件建立索引，再调用 getter 核对。Market 净余额、退税和权利票需结合 Market 与选举事件，不能仅由 `SaleRecorded` 推出。
+链下索引可关注 `SaleRecorded`、`AccountOwnerReleaseRecorded`、`BusinessReleaseRecorded`、`AccountOwnerSupportUpdated`、`ReleaseSharesConfigured`、`BusinessUpdated` 与 `TradeExecutorUpdated`。基类没有枚举所有 owner/乘数的接口；可从事件建立索引，再调用 getter 核对。Market 净余额、暂扣款退回和权利票需结合 Market 与选举事件，不能仅由 `SaleRecorded` 推出。
 
-对应测试见 `test/MerchantBaseTest.t.sol`、`test/MerchantAccountingRegression.t.sol` 和 `test/DepositWithdrawalTest.t.sol`；整体关税与治理见 [Market 机制说明](market-mechanism-zh.md)。
+对应测试见 `test/MerchantBaseTest.t.sol`、`test/MerchantAccountingRegression.t.sol` 和 `test/DepositWithdrawalTest.t.sol`；整体暂扣与治理见 [Market 机制说明](market-mechanism-zh.md)。

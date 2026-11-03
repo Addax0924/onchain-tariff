@@ -25,6 +25,7 @@ interface IMarket {
 
     function deferredSurplus(uint256 accountId) external view returns (uint256);
 
+    // Retainable Surplus (historical name).
     function taxableSurplus(uint256 accountId) external view returns (uint256);
 
     function registerMerchant(address merchant, uint256 amount, uint256 capacityMultiplier)

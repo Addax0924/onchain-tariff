@@ -8,18 +8,18 @@ their responsibilities remain distinct across settlement and voting code.
 **Market Account**:
 A lightweight, non-transferable numeric ID for one immutable Account
 Owner–Merchant pair. Its deposit, capacity multiplier, net trade balance,
-collected tariff, deferred surplus, and active state are tracked independently.
+retained funds, deferred surplus, and active state are tracked independently.
 _Avoid_: Merchant ID, NFT
 
 **Account Owner**:
 The address that creates a Market Account, controls its capacity multiplier,
 and receives that account's rights tokens. It does not automatically have
-authority to spend tariff held for a different Merchant.
+authority to spend funds retained for a different Merchant.
 _Avoid_: Beneficiary, delegatee
 
 **Merchant**:
 The address that receives the account's trade settlement and is the only caller
-that may use the account's refundable tariff when buying for its Account Owner.
+that may use the account's refundable retention when buying for its Account Owner.
 One Merchant may participate in multiple Market Accounts with different Account
 Owners and may reject unsupported owners during its trade callback.
 _Avoid_: Account Owner, seller account
@@ -33,29 +33,39 @@ _Avoid_: Unregistered merchant
 
 **Payer**:
 The `msg.sender` funding a trade. A Payer may fund either a Default Buyer Account
-or an explicitly selected Market Account, but can receive an immediate tariff
+or an explicitly selected Market Account, but can receive an immediate retention
 refund only when the Payer is also that account's Merchant and the declared
 buyer is its Account Owner.
 _Avoid_: Buyer
 
 **Deposit Increase**:
 A permissionless, fully funded increase to a Market Account's deposit. It never
-revalues or reduces collected tariff; changes in theoretical tax are released
+revalues or reduces retained funds; changes in target retention are released
 later through the normal trade refund path. It accelerates deferred-surplus
 release only from the time of the increase onward.
 _Avoid_: Deposit credit
 
+**Retention**:
+The temporary, refundable portion of sale proceeds that Market holds when a
+seller's Retainable Surplus rises. It stays in the settlement asset, is tracked
+per account in `sellerPoints`, and returns through qualifying purchases,
+deposit withdrawal, or a kick. It is not a legal tax and is not protocol
+revenue; only the 1% rights fee goes to the Vault. Code identifiers such as
+`curveTax`, `baseTaxRate`, and `TaxRefunded` keep their historical names.
+_Avoid_: Tariff, tax
+
 **Deferred Surplus**:
 The buyer-side amount of surplus that disappeared while the seller's deficit
-was reduced in the same trade. It remains taxable temporarily and declines
+was reduced in the same trade. It remains subject to retention temporarily and declines
 linearly over time at a deposit-based rate, preventing balance-resolution bots
-from collecting and immediately refunding many accounts' tariffs.
-_Avoid_: Refund quota, deferred tax
+from collecting and immediately refunding many accounts' retained funds.
+_Avoid_: Refund quota, deferred retention
 
-**Taxable Surplus**:
+**Retainable Surplus**:
 The positive part of a Market Account's real net trade balance plus its current
-Deferred Surplus. The tariff curve is evaluated once on this combined amount.
-_Avoid_: Seller points
+Deferred Surplus. The retention curve is evaluated once on this combined amount.
+The code identifier is `taxableSurplus`.
+_Avoid_: Seller points, taxable surplus
 
 **Capacity Multiplier**:
 A per-account capacity parameter expressed in basis points. It may only move
@@ -107,14 +117,14 @@ on either side of a trade, including third-party payments and ID-zero default
 account resolution. Deposit increases and multiplier changes are also blocked.
 The freeze persists until the pending withdrawal is claimed. Only the Account
 Owner may claim, and the principal is paid to that Owner, not Merchant,
-including amounts previously contributed by third parties. Collected tariff is
-not part of the principal withdrawal. Any collected tariff remaining when the
+including amounts previously contributed by third parties. Retained funds are
+not part of the principal withdrawal. Any retained funds remaining when the
 claim matures is paid directly to the Merchant. A governance kick deletes the
 pending claim and frozen flag along with the account, but it may slash no more
-than the account's current Taxable Surplus. Effective deposit is consumed before
-collected tariff when satisfying that limit. Any unused effective deposit, including a
+than the account's current Retainable Surplus. Effective deposit is consumed before
+retained funds when satisfying that limit. Any unused effective deposit, including a
 pending withdrawal, is paid immediately to the Account Owner, and any unused
-collected tariff is paid immediately to the Merchant. There is currently no
+retained funds are paid immediately to the Merchant. There is currently no
 unfreeze/cancellation entry point. Successful
 withdrawal deletes the Market Account and its pair mapping, returning the pair
 to an unregistered state. Re-registration creates a fresh ID; MerchantBase flow
