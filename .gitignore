@@ -16,3 +16,6 @@ out/
 abis/
 
 AGENTS.md
+
+# Deployment outputs (DEPLOYMENT_OUTPUT)
+deployments/*.json

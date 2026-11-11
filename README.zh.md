@@ -84,7 +84,7 @@ forge build
 forge test
 ```
 
-`script/Deploy.s.sol` 展示代理、两侧选举、Timelock、Governor、Market、Vault 与执行器的完整部署和权限移交。`script/DeployMock.s.sol` 用于本地 6 位小数测试代币。部署脚本会读取私钥与结算代币地址，并写回 `.env` 中的合约地址；运行前应审查目标链和环境变量。`script/Interact.s.sol` 当前是注释掉的旧示例，不能当作现行交互接口。
+`script/Deploy.s.sol` 展示代理、两侧选举、Timelock、Governor、Market、Vault 与执行器的完整部署和权限移交。`script/DeployMock.s.sol` 用于本地 6 位小数测试代币。部署脚本会读取私钥与结算代币地址，并写回 `.env` 中的合约地址；运行前应审查目标链和环境变量。如果把 `DEPLOYMENT_OUTPUT` 设为 `deployments/` 下的路径前缀（例如 `deployments/local`），两个脚本会改为写入 `<前缀>.mock.json` 和 `<前缀>.json`，不再读写 `.env`。`script/Interact.s.sol` 当前是注释掉的旧示例，不能当作现行交互接口。
 
 源码、接口和测试是行为依据；本文是阅读入口。当前实现是单一结算代币的独立 Market，没有多币种路由或顺差持有费。
 

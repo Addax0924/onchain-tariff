@@ -84,7 +84,7 @@ forge build
 forge test
 ```
 
-`script/Deploy.s.sol` shows the full proxy, dual-election, Timelock, Governor, Market, Vault, executor, and permission-transfer path. `script/DeployMock.s.sol` deploys a local six-decimal test token. The deployment script reads a private key and settlement-token address and writes contract addresses to `.env`; review the target chain and environment before running it. `script/Interact.s.sol` is currently a commented-out legacy example and is not an interface guide.
+`script/Deploy.s.sol` shows the full proxy, dual-election, Timelock, Governor, Market, Vault, executor, and permission-transfer path. `script/DeployMock.s.sol` deploys a local six-decimal test token. The deployment script reads a private key and settlement-token address and writes contract addresses to `.env`; review the target chain and environment before running it. When `DEPLOYMENT_OUTPUT` is set to a prefix under `deployments/` (for example `deployments/local`), both scripts instead write `<prefix>.mock.json` and `<prefix>.json` and neither read nor write `.env`. `script/Interact.s.sol` is currently a commented-out legacy example and is not an interface guide.
 
 Source, interfaces, and tests define the behavior; this README is a starting point. The current implementation is an independent, single-token Market without a multi-token router or surplus holding fee.
 

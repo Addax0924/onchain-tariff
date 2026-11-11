@@ -195,6 +195,26 @@ contract DeploySystem is EnvFile {
         address timelock,
         address vault
     ) internal {
+        // DEPLOYMENT_OUTPUT is set: write JSON and leave .env untouched
+        string memory output = _deploymentOutput();
+        if (bytes(output).length > 0) {
+            string memory obj = "deployment";
+            vm.serializeUint(obj, "chainId", block.chainid);
+            vm.serializeAddress(obj, "usdc", underlyingToken);
+            vm.serializeAddress(obj, "settlementAsset", settlementAsset);
+            vm.serializeAddress(obj, "market", market);
+            vm.serializeAddress(obj, "tradeExecutor", executor);
+            vm.serializeAddress(obj, "vault", vault);
+            vm.serializeAddress(obj, "buyerElection", buyerElection);
+            vm.serializeAddress(obj, "sellerElection", sellerElection);
+            vm.serializeAddress(obj, "governor", governor);
+            string memory json = vm.serializeAddress(obj, "timelock", timelock);
+            string memory jsonPath = string.concat(output, ".json");
+            vm.writeJson(json, jsonPath);
+            console.log("Wrote", jsonPath);
+            return;
+        }
+
         string memory path = ".env";
         string memory env = vm.readFile(path);
 

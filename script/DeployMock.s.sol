@@ -45,6 +45,18 @@ contract DeployMock is EnvFile {
         console.log("Status: 1,000,000 USDC minted to deployer");
         console.log("======================================");
 
+        // DEPLOYMENT_OUTPUT is set: write JSON and leave .env untouched
+        string memory output = _deploymentOutput();
+        if (bytes(output).length > 0) {
+            string memory obj = "mock";
+            vm.serializeUint(obj, "chainId", block.chainid);
+            string memory json = vm.serializeAddress(obj, "usdc", address(usdc));
+            string memory jsonPath = string.concat(output, ".mock.json");
+            vm.writeJson(json, jsonPath);
+            console.log("Wrote", jsonPath);
+            return;
+        }
+
         // 写回 .env，供 Deploy.s.sol 读取 USDC_ADDRESS
         string memory path = ".env";
         string memory env = vm.readFile(path);

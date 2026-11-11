@@ -3,8 +3,26 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 
-/// @dev Shared helpers for scripts that upsert `KEY=value` lines in `.env`.
+/// @dev Shared helpers for deployment outputs: `KEY=value` lines in `.env`, or
+///      JSON files under `deployments/` when `DEPLOYMENT_OUTPUT` is set.
 abstract contract EnvFile is Script {
+    /// @dev Returns the `DEPLOYMENT_OUTPUT` path prefix, or "" when unset or empty.
+    ///      A nonempty prefix must stay inside `deployments/`.
+    function _deploymentOutput() internal view returns (string memory prefix) {
+        prefix = vm.envOr("DEPLOYMENT_OUTPUT", string(""));
+        bytes memory data = bytes(prefix);
+        if (data.length == 0) return prefix;
+
+        bytes memory dir = bytes("deployments/");
+        require(data.length > dir.length, "DEPLOYMENT_OUTPUT must be under deployments/");
+        for (uint256 i = 0; i < dir.length; i++) {
+            require(data[i] == dir[i], "DEPLOYMENT_OUTPUT must be under deployments/");
+        }
+        for (uint256 i = 0; i + 1 < data.length; i++) {
+            require(data[i] != "." || data[i + 1] != ".", "DEPLOYMENT_OUTPUT must not contain ..");
+        }
+    }
+
     function _upsertEnvAddress(
         string memory env,
         string memory key,
