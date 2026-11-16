@@ -7,7 +7,6 @@ interface ITradeExecutor {
         address rightsOwner,
         uint160 rechargeTarget,
         uint256 netAmount,
-        uint256 deltaW,
         bytes calldata data
     ) external;
 }

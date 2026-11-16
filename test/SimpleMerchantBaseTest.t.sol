@@ -29,7 +29,6 @@ contract SimpleMerchantRightsMock {
 contract SimpleMerchantHarness is SimpleMerchantBase {
     uint160 public lastRechargeTarget;
     uint256 public lastNetAmount;
-    uint256 public lastDeltaW;
 
     function initialize(
         address market_,
@@ -45,10 +44,9 @@ contract SimpleMerchantHarness is SimpleMerchantBase {
         );
     }
 
-    function _tradeIn(uint160 rechargeTarget, uint256 netAmount, uint256 deltaW, bytes calldata) internal override {
+    function _tradeIn(uint160 rechargeTarget, uint256 netAmount, bytes calldata) internal override {
         lastRechargeTarget = rechargeTarget;
         lastNetAmount = netAmount;
-        lastDeltaW = deltaW;
     }
 }
 
@@ -146,13 +144,11 @@ contract SimpleMerchantBaseTest is Test {
 
         _sale(100e6);
 
-        uint256 actualTariff = market.sellerPoints(merchantAccountId);
         assertEq(merchant.accountId(), merchantAccountId);
         assertEq(merchant.received(), 99e6);
         assertEq(merchant.lastRechargeTarget(), 7);
         assertEq(merchant.lastNetAmount(), 99e6);
-        assertEq(merchant.lastDeltaW(), 99e6 - actualTariff);
-        assertEq(token.balanceOf(address(merchant)), merchant.lastDeltaW());
+        assertEq(token.balanceOf(address(merchant)), 99e6);
         assertEq(sellerRights.balanceOf(accountOwner), 1e6);
         (uint256 ownerAvailable, uint256 businessAvailable) = merchant.releaseAvailable();
         assertEq(ownerAvailable, 39_600_000);
@@ -165,10 +161,7 @@ contract SimpleMerchantBaseTest is Test {
         uint256 cashBefore = token.balanceOf(address(merchant));
         vm.prank(accountOwner);
         merchant.tradeOut(upstreamAccountId, 11, 10e6, "");
-        uint256 cashSpent = cashBefore - token.balanceOf(address(merchant));
-        assertLt(cashSpent, 10e6);
-        assertGt(cashSpent, 100_000); // The rights fee is still paid.
-        assertGt(market.claimed(merchantAccountId), 0);
+        assertEq(cashBefore - token.balanceOf(address(merchant)), 10e6);
 
         vm.prank(business);
         merchant.tradeOut(upstreamAccountId, 12, 10e6, "");
@@ -189,7 +182,6 @@ contract SimpleMerchantBaseTest is Test {
         (,, uint256 depositBefore,,) = market.accounts(merchantAccountId);
         uint256 merchantCashBefore = token.balanceOf(address(merchant));
         uint256 ownerCashBefore = token.balanceOf(accountOwner);
-        uint256 tariffBefore = market.sellerPoints(merchantAccountId);
         (, uint256 businessAvailableBefore) = merchant.releaseAvailable();
 
         vm.prank(accountOwner);
@@ -199,7 +191,6 @@ contract SimpleMerchantBaseTest is Test {
         assertEq(depositAfter, depositBefore + 20e6);
         assertEq(merchantCashBefore - token.balanceOf(address(merchant)), 20e6);
         assertEq(token.balanceOf(accountOwner), ownerCashBefore);
-        assertEq(market.sellerPoints(merchantAccountId), tariffBefore);
         assertEq(merchant.ownerReleased(), 20e6);
         assertEq(merchant.businessReleased(), 0);
         assertEq(token.allowance(address(merchant), address(settlement)), 0);

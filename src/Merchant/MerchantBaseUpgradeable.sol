@@ -191,13 +191,12 @@ abstract contract MerchantBase is Initializable, OwnableUpgradeable, UUPSUpgrade
         IMarket($.market).trade(buyer, buyerAccountId, sellerAccountId, rechargeTarget, amount, data);
     }
 
-    function tradeIn(
-        address registeredRightsOwner,
-        uint160 rechargeTarget,
-        uint256 netAmount,
-        uint256 deltaW,
-        bytes calldata data
-    ) external virtual override onlyTradeExecutor {
+    function tradeIn(address registeredRightsOwner, uint160 rechargeTarget, uint256 netAmount, bytes calldata data)
+        external
+        virtual
+        override
+        onlyTradeExecutor
+    {
         MerchantBaseStorage storage $ = _getMerchantBaseStorage();
         require($.supportedAccountOwners[registeredRightsOwner], "Unsupported account owner");
 
@@ -211,16 +210,12 @@ abstract contract MerchantBase is Initializable, OwnableUpgradeable, UUPSUpgrade
         $.accountOwnerFlows[registeredRightsOwner][capacityMultiplier].received += netAmount;
         $.businessFlows[capacityMultiplier].received += netAmount;
         emit SaleRecorded(accountId, registeredRightsOwner, rechargeTarget, capacityMultiplier, netAmount);
-        _tradeIn(rechargeTarget, capacityMultiplier, netAmount, deltaW, data);
+        _tradeIn(rechargeTarget, capacityMultiplier, netAmount, data);
     }
 
-    function _tradeIn(
-        uint160 rechargeTarget,
-        uint256 capacityMultiplier,
-        uint256 netAmount,
-        uint256 deltaW,
-        bytes calldata data
-    ) internal virtual;
+    function _tradeIn(uint160 rechargeTarget, uint256 capacityMultiplier, uint256 netAmount, bytes calldata data)
+        internal
+        virtual;
 
     function _recordAccountOwnerRelease(
         uint256 accountId,

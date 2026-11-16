@@ -19,14 +19,13 @@ interface IMarket {
 
     function accountIdOf(address owner, address merchant) external view returns (uint256);
 
-    function sellerPoints(uint256 accountId) external view returns (uint256);
-
     function netTradeBalance(uint256 accountId) external view returns (int256);
 
     function deferredSurplus(uint256 accountId) external view returns (uint256);
 
-    // Retainable Surplus (historical name).
-    function taxableSurplus(uint256 accountId) external view returns (uint256);
+    function effectiveSurplus(uint256 accountId) external view returns (uint256);
+
+    function capacityOf(uint256 accountId) external view returns (uint256);
 
     function registerMerchant(address merchant, uint256 amount, uint256 capacityMultiplier)
         external

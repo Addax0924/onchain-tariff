@@ -15,7 +15,6 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     uint256 public constant BPS = 10000;
     uint256 public constant WAD = 1e18;
     uint256 public constant MIN_CAPACITY_MULTIPLIER = 1000;
-    uint256 public constant MAX_CURVE_EXPONENT = 10;
     uint256 public constant RESOLUTION_PERIOD = 30 days;
     uint256 public constant DEPOSIT_WITHDRAWAL_DELAY = 180 days;
 
@@ -37,9 +36,6 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     struct TradeCalculation {
         uint256 vaultFee;
         uint256 tradeValue;
-        uint256 deltaW;
-        uint256 deltaS;
-        uint256 buyerRefund;
         uint256 resolvedSurplus;
         int256 newSellerBalance;
         int256 newBuyerBalance;
@@ -54,9 +50,6 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     mapping(uint256 => MarketAccount) public accounts;
     mapping(address => mapping(address => uint256)) public accountIdOf;
 
-    // Retained, still-refundable sale proceeds per account (historical name).
-    mapping(uint256 => uint256) public sellerPoints;
-    mapping(uint256 => uint256) public claimed;
     mapping(uint256 => int256) public netTradeBalance;
     mapping(uint256 => uint256) private _deferredSurplus;
     mapping(uint256 => uint256) private _deferredReleaseIndex;
@@ -65,11 +58,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     uint256 public resolutionRatio;
     uint256 public resolutionIndex;
     uint256 public resolutionIndexUpdatedAt;
-    // Base retention rate in BPS. "Tax" names are historical; retention is refundable, not a tax.
-    uint256 public baseTaxRate;
-    uint256 public curveExponent;
-
-    // Append new storage: pending funds no longer provide capacity or release deferred surplus.
+    // Pending funds no longer provide capacity or release deferred surplus.
     mapping(uint256 => DepositWithdrawal) public depositWithdrawals;
     mapping(uint256 => bool) public isAccountFrozen;
 
@@ -101,8 +90,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         uint256 buyerAccountId,
         address merchant,
         uint256 amount,
-        uint256 W,
-        uint256 deltaS
+        uint256 netAmount
     );
     event TradeBalanceChanged(
         uint256 indexed buyerAccountId,
@@ -115,15 +103,12 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         int256 newMerchantBalance
     );
     event TradeBalanceUpdated(uint256 indexed accountId, int256 netTradeBalance);
-    // Retained funds returned to the account's Merchant (by purchase offset, withdrawal, or kick).
-    event TaxRefunded(uint256 indexed accountId, uint256 amount);
     event MerchantKicked(
         uint256 indexed accountId,
         address indexed owner,
         address indexed merchant,
         uint256 slashedAmount,
-        uint256 ownerRefund,
-        uint256 merchantRefund
+        uint256 ownerRefund
     );
 
     constructor() {
@@ -146,8 +131,6 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         nextAccountId = 1;
         resolutionRatio = 5000;
         resolutionIndexUpdatedAt = block.timestamp;
-        baseTaxRate = 900;
-        curveExponent = 2;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -198,60 +181,24 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         return buyerAccountId;
     }
 
-    // Target cumulative retention for retainable surplus P.
-    function curveTax(uint256 P, uint256 deposit, uint256 capacityMultiplier) external view returns (uint256) {
-        return _curveTax(P, deposit, capacityMultiplier);
-    }
-
-    function accountCurveTax(uint256 accountId, uint256 positiveBalance) external view returns (uint256) {
-        return _accountCurveTax(accountId, positiveBalance);
-    }
-
     function deferredSurplus(uint256 accountId) public view returns (uint256) {
         (uint256 current,,) = _previewDeferredSurplus(accountId);
         return current;
     }
 
-    // Retainable Surplus: positive real balance plus current deferred surplus.
-    function taxableSurplus(uint256 accountId) public view returns (uint256) {
+    /// @notice Effective Surplus: positive real balance plus current deferred surplus.
+    function effectiveSurplus(uint256 accountId) public view returns (uint256) {
         return _positive(netTradeBalance[accountId]) + deferredSurplus(accountId);
     }
 
-    function _curveTax(uint256 P, uint256 deposit, uint256 capacityMultiplier) internal view returns (uint256) {
-        if (P == 0) return 0;
-        require(deposit > 0, "Deposit required");
-        require(capacityMultiplier >= MIN_CAPACITY_MULTIPLIER, "Invalid capacity multiplier");
-
-        uint256 capacity = FixedPointMathLib.fullMulDiv(deposit, capacityMultiplier, BPS);
-        require(capacity > 0, "Invalid capacity");
-        require(P <= capacity, "Capacity exceeded");
-
-        uint256 baseTax = FixedPointMathLib.fullMulDivUp(P, baseTaxRate, BPS);
-        uint256 variableRate = BPS - baseTaxRate;
-        if (variableRate == 0) return baseTax > P ? P : baseTax;
-
-        uint256 ratio = FixedPointMathLib.fullMulDiv(P, WAD, capacity);
-        uint256 ratioPow = FixedPointMathLib.rpow(ratio, curveExponent, WAD);
-        uint256 variableBase = FixedPointMathLib.fullMulDivUp(P, variableRate, BPS);
-        uint256 variableTax = FixedPointMathLib.fullMulDivUp(variableBase, ratioPow, WAD * (curveExponent + 1));
-        uint256 tax = baseTax + variableTax;
-        return tax > P ? P : tax;
-    }
-
-    function _accountCurveTax(uint256 accountId, uint256 positiveBalance) internal view returns (uint256) {
-        return _accountCurveTaxWithDeferred(accountId, positiveBalance, deferredSurplus(accountId));
-    }
-
-    function _accountCurveTaxWithDeferred(uint256 accountId, uint256 positiveBalance, uint256 deferred)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 taxableP = positiveBalance + deferred;
-        if (taxableP == 0) return 0;
+    /// @notice Deposit-backed capacity: deposit * capacityMultiplier / BPS.
+    function capacityOf(uint256 accountId) public view returns (uint256) {
         MarketAccount storage account = accounts[accountId];
-        if (account.deposit == 0) return 0;
-        return _curveTax(taxableP, account.deposit, account.capacityMultiplier);
+        return _capacity(account.deposit, account.capacityMultiplier);
+    }
+
+    function _capacity(uint256 deposit, uint256 capacityMultiplier) internal pure returns (uint256) {
+        return FixedPointMathLib.fullMulDiv(deposit, capacityMultiplier, BPS);
     }
 
     function _currentResolutionIndex() internal view returns (uint256) {
@@ -310,28 +257,6 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         resolutionIndexUpdatedAt = block.timestamp;
     }
 
-    function _applyTaxRefund(uint256 accountId, uint256 requestedRefund) internal returns (uint256 refund) {
-        uint256 collectedTax = sellerPoints[accountId];
-        refund = requestedRefund < collectedTax ? requestedRefund : collectedTax;
-        if (refund == 0) return 0;
-
-        sellerPoints[accountId] -= refund;
-        claimed[accountId] += refund;
-        emit TaxRefunded(accountId, refund);
-    }
-
-    function calculateAMM(uint256 sellerAccountId, uint256 amount)
-        public
-        view
-        returns (uint256 deltaW, uint256 deltaS)
-    {
-        require(amount > 0, "Invalid amount");
-        TradeCalculation memory calculation;
-        calculation.tradeValue = amount - (amount / 100);
-        _calculateSellerTrade(sellerAccountId, calculation);
-        return (calculation.deltaW, calculation.deltaS);
-    }
-
     function _calculateSellerTrade(uint256 sellerAccountId, TradeCalculation memory calculation) internal view {
         MarketAccount storage account = accounts[sellerAccountId];
         require(account.isActive, "Merchant account not active");
@@ -341,35 +266,26 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         int256 tradeValueInt = _toInt256(calculation.tradeValue);
         int256 oldSellerBalance = netTradeBalance[sellerAccountId];
         calculation.newSellerBalance = oldSellerBalance + tradeValueInt;
-        uint256 newTax = _accountCurveTax(sellerAccountId, _positive(calculation.newSellerBalance));
-        uint256 collectedTax = sellerPoints[sellerAccountId];
-        if (newTax > collectedTax) {
-            calculation.deltaS = newTax - collectedTax;
-            if (calculation.deltaS > calculation.tradeValue) {
-                calculation.deltaS = calculation.tradeValue;
-            }
+
+        uint256 surplus = _positive(calculation.newSellerBalance) + deferredSurplus(sellerAccountId);
+        if (surplus > 0) {
+            require(surplus <= _capacity(account.deposit, account.capacityMultiplier), "Capacity exceeded");
         }
-        calculation.deltaW = calculation.tradeValue - calculation.deltaS;
     }
 
-    function _calculateBuyerRefund(uint256 buyerAccountId, TradeCalculation memory calculation) internal view {
+    function _calculateBuyerTrade(uint256 buyerAccountId, TradeCalculation memory calculation) internal view {
         int256 tradeValueInt = _toInt256(calculation.tradeValue);
         int256 oldBuyerBalance = netTradeBalance[buyerAccountId];
         calculation.newBuyerBalance = oldBuyerBalance - tradeValueInt;
 
+        // Surplus that disappears together with the seller's deficit stays effective for a while,
+        // so bots cannot net many accounts' surpluses and deficits away at once.
         int256 oldSellerBalance = calculation.newSellerBalance - tradeValueInt;
         uint256 buyerSurplusReduced = _positive(oldBuyerBalance) - _positive(calculation.newBuyerBalance);
         uint256 sellerDeficitReduced =
             _negativeMagnitude(oldSellerBalance) - _negativeMagnitude(calculation.newSellerBalance);
         calculation.resolvedSurplus =
             buyerSurplusReduced < sellerDeficitReduced ? buyerSurplusReduced : sellerDeficitReduced;
-
-        uint256 newDeferred = deferredSurplus(buyerAccountId) + calculation.resolvedSurplus;
-        uint256 newTax =
-            _accountCurveTaxWithDeferred(buyerAccountId, _positive(calculation.newBuyerBalance), newDeferred);
-        uint256 collectedTax = sellerPoints[buyerAccountId];
-        uint256 requestedRefund = collectedTax > newTax ? collectedTax - newTax : 0;
-        calculation.buyerRefund = requestedRefund < calculation.tradeValue ? requestedRefund : calculation.tradeValue;
     }
 
     function registerMerchant(address merchant, uint256 amount, uint256 capacityMultiplier)
@@ -434,7 +350,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         depositWithdrawals[accountId] = DepositWithdrawal(amount, availableAt);
         isAccountFrozen[accountId] = true;
 
-        // Keep historical state, but freeze both trade directions even after the principal is claimed.
+        // Preserve the account while pending, but block both trade directions until deletion.
         emit DepositWithdrawalRequested(accountId, account.owner, amount, availableAt);
     }
 
@@ -445,11 +361,8 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         require(withdrawal.amount > 0, "No deposit withdrawal");
         require(block.timestamp >= withdrawal.availableAt, "Deposit withdrawal not ready");
 
-        uint256 tariffRefund = sellerPoints[accountId];
         delete accountIdOf[account.owner][account.merchant];
         delete accounts[accountId];
-        delete sellerPoints[accountId];
-        delete claimed[accountId];
         delete netTradeBalance[accountId];
         delete _deferredSurplus[accountId];
         delete _deferredReleaseIndex[accountId];
@@ -457,10 +370,6 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         delete depositWithdrawals[accountId];
         delete isAccountFrozen[accountId];
         settlementAsset.push(account.owner, withdrawal.amount);
-        if (tariffRefund > 0) {
-            settlementAsset.push(account.merchant, tariffRefund);
-            emit TaxRefunded(accountId, tariffRefund);
-        }
         emit TradeBalanceUpdated(accountId, 0);
         emit DepositWithdrawn(accountId, account.owner, withdrawal.amount);
     }
@@ -477,10 +386,9 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
             require(netTradeBalance[accountId] >= 0, "Outstanding deficit");
         }
 
-        uint256 taxableP = taxableSurplus(accountId);
-        if (taxableP > 0) {
-            uint256 capacity = FixedPointMathLib.fullMulDiv(account.deposit, newMultiplier, BPS);
-            require(taxableP <= capacity, "Capacity exceeded");
+        uint256 surplus = effectiveSurplus(accountId);
+        if (surplus > 0) {
+            require(surplus <= _capacity(account.deposit, newMultiplier), "Capacity exceeded");
         }
 
         account.capacityMultiplier = newMultiplier;
@@ -523,22 +431,14 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         calculation.vaultFee = amount / 100;
         calculation.tradeValue = amount - calculation.vaultFee;
         _calculateSellerTrade(sellerAccountId, calculation);
-        _calculateBuyerRefund(buyerAccountId, calculation);
-
-        bool canUseRefund = buyerAccount.owner == buyer && msg.sender == buyerAccount.merchant;
-        if (!canUseRefund) calculation.buyerRefund = 0;
+        _calculateBuyerTrade(buyerAccountId, calculation);
 
         netTradeBalance[sellerAccountId] = calculation.newSellerBalance;
         netTradeBalance[buyerAccountId] = calculation.newBuyerBalance;
         _addDeferredSurplus(buyerAccountId, calculation.resolvedSurplus);
 
-        if (calculation.buyerRefund > 0) {
-            calculation.buyerRefund = _applyTaxRefund(buyerAccountId, calculation.buyerRefund);
-        }
-
-        settlementAsset.pull(msg.sender, amount - calculation.buyerRefund);
+        settlementAsset.pull(msg.sender, amount);
         settlementAsset.push(vault, calculation.vaultFee);
-        sellerPoints[sellerAccountId] += calculation.deltaS;
 
         if (buyerAccount.owner != vault || buyerAccount.merchant != vault) {
             buyerRights.mint(buyerAccount.owner, calculation.vaultFee);
@@ -546,14 +446,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         sellerRights.mint(sellerAccount.owner, calculation.vaultFee);
 
         ITradeExecutor(executor)
-            .executeTrade(
-                sellerAccount.merchant,
-                sellerAccount.owner,
-                rechargeTarget,
-                calculation.tradeValue,
-                calculation.deltaW,
-                data
-            );
+            .executeTrade(sellerAccount.merchant, sellerAccount.owner, rechargeTarget, calculation.tradeValue, data);
 
         emit TradeBalanceUpdated(sellerAccountId, calculation.newSellerBalance);
         emit TradeBalanceUpdated(buyerAccountId, calculation.newBuyerBalance);
@@ -569,14 +462,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
             calculation.newSellerBalance
         );
         emit Traded(
-            msg.sender,
-            buyer,
-            sellerAccountId,
-            buyerAccountId,
-            sellerAccount.merchant,
-            amount,
-            calculation.deltaW,
-            calculation.deltaS
+            msg.sender, buyer, sellerAccountId, buyerAccountId, sellerAccount.merchant, amount, calculation.tradeValue
         );
     }
 
@@ -585,23 +471,16 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         MarketAccount memory account = accounts[accountId];
         require(account.isActive, "Merchant account not active");
 
+        // Effective deposit includes a pending withdrawal; slash at most the Effective Surplus.
         uint256 depositAmount = account.deposit + depositWithdrawals[accountId].amount;
-        uint256 tariffAmount = sellerPoints[accountId];
-        uint256 heldAmount = depositAmount + tariffAmount;
-        uint256 surplus = taxableSurplus(accountId);
-        uint256 slashedAmount = surplus < heldAmount ? surplus : heldAmount;
-
-        // Deposit is the account's collateral; preserve refundable merchant retention until collateral is exhausted.
-        uint256 slashedDeposit = depositAmount < slashedAmount ? depositAmount : slashedAmount;
-        uint256 ownerRefund = depositAmount - slashedDeposit;
-        uint256 merchantRefund = tariffAmount - (slashedAmount - slashedDeposit);
+        uint256 surplus = effectiveSurplus(accountId);
+        uint256 slashedAmount = surplus < depositAmount ? surplus : depositAmount;
+        uint256 ownerRefund = depositAmount - slashedAmount;
 
         delete depositWithdrawals[accountId];
         delete isAccountFrozen[accountId];
         delete accountIdOf[account.owner][account.merchant];
         delete accounts[accountId];
-        delete sellerPoints[accountId];
-        delete claimed[accountId];
         delete netTradeBalance[accountId];
         delete _deferredSurplus[accountId];
         delete _deferredReleaseIndex[accountId];
@@ -609,10 +488,8 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
 
         settlementAsset.push(vault, slashedAmount);
         settlementAsset.push(account.owner, ownerRefund);
-        settlementAsset.push(account.merchant, merchantRefund);
-        if (merchantRefund > 0) emit TaxRefunded(accountId, merchantRefund);
         emit TradeBalanceUpdated(accountId, 0);
-        emit MerchantKicked(accountId, account.owner, account.merchant, slashedAmount, ownerRefund, merchantRefund);
+        emit MerchantKicked(accountId, account.owner, account.merchant, slashedAmount, ownerRefund);
     }
 
     /// @notice Pin an inactive Vault buyer account to its maximum permitted Market tier.
@@ -643,13 +520,5 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         require(_newRatio <= BPS, "Invalid resolution ratio");
         _syncResolutionIndex();
         resolutionRatio = _newRatio;
-    }
-
-    function setGlobalAMMParams(uint256 _baseTaxRate, uint256 _curveExponent) external onlyOwner {
-        require(_baseTaxRate <= BPS, "Invalid base retention rate");
-        require(_curveExponent > 0, "Invalid curve exponent");
-        require(_curveExponent <= MAX_CURVE_EXPONENT, "Curve exponent too high");
-        baseTaxRate = _baseTaxRate;
-        curveExponent = _curveExponent;
     }
 }

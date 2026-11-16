@@ -161,14 +161,11 @@ contract DepositWithdrawalTest is Test {
 
         vm.warp(block.timestamp + 6 days);
         assertEq(market.deferredSurplus(id), 0);
-        uint256 points = market.sellerPoints(id);
         _trade(alice, alice, id, other, 100e6);
-        assertEq(market.sellerPoints(id), 0);
         _request(id, alice);
-        assertEq(market.claimed(id), points);
         assertEq(market.netTradeBalance(id), -198e6);
         vm.warp(block.timestamp + 180 days);
-        assertEq(market.taxableSurplus(id), 0);
+        assertEq(market.effectiveSurplus(id), 0);
     }
 
     function testZeroRealBalanceWithDeferredSurplusCannotRequest() public {
@@ -188,8 +185,6 @@ contract DepositWithdrawalTest is Test {
         _trade(alice, alice, id, other, 100e6);
         _request(id, alice);
         uint256 custodyBefore = token.balanceOf(address(settlement));
-        vm.expectRevert("Account frozen");
-        market.calculateAMM(id, 1);
         vm.startPrank(carol);
         token.approve(address(settlement), 1);
         vm.expectRevert("Account frozen");
@@ -201,8 +196,6 @@ contract DepositWithdrawalTest is Test {
         vm.warp(block.timestamp + 180 days);
         vm.prank(alice);
         market.withdrawDeposit(id);
-        vm.expectRevert("Merchant account not active");
-        market.calculateAMM(id, 1);
         vm.prank(carol);
         vm.expectRevert("Merchant account not active");
         market.trade(carol, 0, id, 0, 1, "");
@@ -337,17 +330,14 @@ contract DepositWithdrawalTest is Test {
         assertEq(market.netTradeBalance(fresh), 99e6);
     }
 
-    function testResidualTariffIsRefundedToMerchantWhenDepositIsWithdrawn() public {
+    function testWithdrawalPaysOnlyPrincipalToOwner() public {
         uint256 id = _register(alice, bob, 40000);
         uint256 other = _register(carol, carol, 40000);
         _trade(carol, carol, other, id, 100e6);
         _trade(carol, alice, id, other, 200e6);
         vm.warp(block.timestamp + 7 days);
-        uint256 points = market.sellerPoints(id);
-        assertGt(points, 0);
         _request(id, alice);
         assertTrue(market.isAccountFrozen(id));
-        assertEq(market.sellerPoints(id), points);
 
         uint256 ownerBefore = token.balanceOf(alice);
         uint256 merchantBefore = token.balanceOf(bob);
@@ -355,20 +345,16 @@ contract DepositWithdrawalTest is Test {
         vm.prank(alice);
         market.withdrawDeposit(id);
         assertEq(token.balanceOf(alice) - ownerBefore, DEPOSIT);
-        assertEq(token.balanceOf(bob) - merchantBefore, points);
-        assertEq(market.sellerPoints(id), 0);
-        assertEq(market.claimed(id), 0);
+        assertEq(token.balanceOf(bob), merchantBefore);
     }
 
-    function testKickRefundsPendingDepositAndResidualTariffAtZeroSurplus() public {
+    function testKickRefundsPendingDepositAtZeroSurplus() public {
         uint256 id = _register(alice, bob, 40000);
         uint256 other = _register(carol, carol, 40000);
         _trade(carol, carol, other, id, 100e6);
         _trade(carol, alice, id, other, 200e6);
         vm.warp(block.timestamp + 7 days);
-        uint256 tariff = market.sellerPoints(id);
-        assertEq(market.taxableSurplus(id), 0);
-        assertGt(tariff, 0);
+        assertEq(market.effectiveSurplus(id), 0);
         _request(id, alice);
         uint256 vaultBefore = token.balanceOf(vault);
         uint256 ownerBefore = token.balanceOf(alice);
@@ -376,13 +362,12 @@ contract DepositWithdrawalTest is Test {
         market.kickMerchant(id);
         assertEq(token.balanceOf(vault), vaultBefore);
         assertEq(token.balanceOf(alice) - ownerBefore, DEPOSIT);
-        assertEq(token.balanceOf(bob) - merchantBefore, tariff);
+        assertEq(token.balanceOf(bob), merchantBefore);
         assertEq(market.accountIdOf(alice, bob), 0);
         assertFalse(market.isAccountFrozen(id));
         (uint256 pending, uint256 deadline) = market.depositWithdrawals(id);
         assertEq(pending, 0);
         assertEq(deadline, 0);
-        assertEq(market.sellerPoints(id), 0);
         vm.warp(block.timestamp + 180 days);
         vm.prank(alice);
         vm.expectRevert("Only account owner");
@@ -395,14 +380,12 @@ contract DepositWithdrawalTest is Test {
         assertEq(deadline, 0);
     }
 
-    function testKickSlashesOwnerDepositBeforeMerchantTariff() public {
+    function testKickSlashesSurplusFromDeposit() public {
         uint256 id = _register(alice, bob, 40000);
         _trade(carol, carol, 0, id, 100e6);
 
-        uint256 surplus = market.taxableSurplus(id);
-        uint256 tariff = market.sellerPoints(id);
+        uint256 surplus = market.effectiveSurplus(id);
         assertLt(surplus, DEPOSIT);
-        assertGt(tariff, 0);
 
         uint256 vaultBefore = token.balanceOf(vault);
         uint256 ownerBefore = token.balanceOf(alice);
@@ -411,29 +394,25 @@ contract DepositWithdrawalTest is Test {
 
         assertEq(token.balanceOf(vault) - vaultBefore, surplus);
         assertEq(token.balanceOf(alice) - ownerBefore, DEPOSIT - surplus);
-        assertEq(token.balanceOf(bob) - merchantBefore, tariff);
+        assertEq(token.balanceOf(bob), merchantBefore);
         assertEq(market.accountIdOf(alice, bob), 0);
     }
 
-    function testKickCannotSlashMoreThanHeldFunds() public {
+    function testKickCannotSlashMoreThanDeposit() public {
         uint256 id = _register(alice, bob, 40000);
         _trade(carol, carol, 0, id, 3500e6);
-
-        uint256 tariff = market.sellerPoints(id);
-        uint256 held = DEPOSIT + tariff;
-        assertGt(market.taxableSurplus(id), held);
+        assertGt(market.effectiveSurplus(id), DEPOSIT);
 
         uint256 vaultBefore = token.balanceOf(vault);
         uint256 ownerBefore = token.balanceOf(alice);
         uint256 merchantBefore = token.balanceOf(bob);
         market.kickMerchant(id);
 
-        assertEq(token.balanceOf(vault) - vaultBefore, held);
+        assertEq(token.balanceOf(vault) - vaultBefore, DEPOSIT);
         assertEq(token.balanceOf(alice), ownerBefore);
         assertEq(token.balanceOf(bob), merchantBefore);
         assertEq(market.accountIdOf(alice, bob), 0);
-        assertEq(market.sellerPoints(id), 0);
-        assertEq(market.taxableSurplus(id), 0);
+        assertEq(market.effectiveSurplus(id), 0);
     }
 
     function testKickAfterWithdrawalCannotSlashPrincipalAgain() public {
@@ -513,7 +492,6 @@ contract DepositWithdrawalTest is Test {
         vm.warp(block.timestamp + 7 days);
         vm.prank(alice);
         platform.tradeOut(alice, id, other, 0, 11e6, "");
-        assertEq(market.sellerPoints(id), 0);
         _request(id, alice);
 
         uint256 before = token.balanceOf(address(platform));

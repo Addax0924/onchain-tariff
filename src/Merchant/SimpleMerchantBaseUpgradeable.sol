@@ -44,7 +44,7 @@ abstract contract SimpleMerchantBase is
 
     event TradeExecutorUpdated(address indexed oldTradeExecutor, address indexed newTradeExecutor);
     event BusinessUpdated(address indexed oldBusiness, address indexed newBusiness);
-    event SaleRecorded(uint256 indexed accountId, uint160 indexed rechargeTarget, uint256 netAmount, uint256 deltaW);
+    event SaleRecorded(uint256 indexed accountId, uint160 indexed rechargeTarget, uint256 netAmount);
     event OwnerReleaseRecorded(uint256 indexed accountId, uint256 amount);
     event OwnerShareDeposited(uint256 indexed accountId, uint256 amount);
     event BusinessReleaseRecorded(uint256 indexed accountId, uint256 amount);
@@ -117,20 +117,18 @@ abstract contract SimpleMerchantBase is
         businessAmount = Math.mulDiv(received, businessShareBps, BPS) - businessReleased;
     }
 
-    function tradeIn(
-        address registeredRightsOwner,
-        uint160 rechargeTarget,
-        uint256 netAmount,
-        uint256 deltaW,
-        bytes calldata data
-    ) external override nonReentrant {
+    function tradeIn(address registeredRightsOwner, uint160 rechargeTarget, uint256 netAmount, bytes calldata data)
+        external
+        override
+        nonReentrant
+    {
         require(msg.sender == tradeExecutor, "Only trade executor");
         require(registeredRightsOwner == accountOwner, "Wrong account owner");
         uint256 activeId = _activeAccount();
 
         received += netAmount;
-        emit SaleRecorded(activeId, rechargeTarget, netAmount, deltaW);
-        _tradeIn(rechargeTarget, netAmount, deltaW, data);
+        emit SaleRecorded(activeId, rechargeTarget, netAmount);
+        _tradeIn(rechargeTarget, netAmount, data);
     }
 
     /// @notice The Account Owner or business spends its own fixed share through this one Market account.
@@ -176,7 +174,7 @@ abstract contract SimpleMerchantBase is
         emit OwnerShareDeposited(activeId, amount);
     }
 
-    function _tradeIn(uint160 rechargeTarget, uint256 netAmount, uint256 deltaW, bytes calldata data) internal virtual;
+    function _tradeIn(uint160 rechargeTarget, uint256 netAmount, bytes calldata data) internal virtual;
 
     function _activeAccount() private returns (uint256 activeId) {
         activeId = market.accountIdOf(accountOwner, address(this));

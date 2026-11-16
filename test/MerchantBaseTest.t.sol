@@ -14,7 +14,6 @@ contract MerchantBaseHarness is MerchantBase {
     uint160 public lastRechargeTarget;
     uint256 public lastCapacityMultiplier;
     uint256 public lastNetAmount;
-    uint256 public lastDeltaW;
 
     function initialize(
         address market,
@@ -30,17 +29,13 @@ contract MerchantBaseHarness is MerchantBase {
         );
     }
 
-    function _tradeIn(
-        uint160 rechargeTarget,
-        uint256 capacityMultiplier,
-        uint256 netAmount,
-        uint256 deltaW,
-        bytes calldata
-    ) internal override {
+    function _tradeIn(uint160 rechargeTarget, uint256 capacityMultiplier, uint256 netAmount, bytes calldata)
+        internal
+        override
+    {
         lastRechargeTarget = rechargeTarget;
         lastCapacityMultiplier = capacityMultiplier;
         lastNetAmount = netAmount;
-        lastDeltaW = deltaW;
     }
 }
 
@@ -55,11 +50,9 @@ contract MerchantBaseExecutorMock {
         market = _market;
     }
 
-    function forward(address merchant, address accountOwner, uint160 rechargeTarget, uint256 netAmount, uint256 deltaW)
-        external
-    {
+    function forward(address merchant, address accountOwner, uint160 rechargeTarget, uint256 netAmount) external {
         require(msg.sender == market, "Only market");
-        IMerchantTradeIn(merchant).tradeIn(accountOwner, rechargeTarget, netAmount, deltaW, "");
+        IMerchantTradeIn(merchant).tradeIn(accountOwner, rechargeTarget, netAmount, "");
     }
 }
 
@@ -103,10 +96,9 @@ contract MerchantBaseMarketMock is ReentrancyGuardTransient {
         address merchant,
         address accountOwner,
         uint160 rechargeTarget,
-        uint256 netAmount,
-        uint256 deltaW
+        uint256 netAmount
     ) external nonReentrant {
-        executor.forward(merchant, accountOwner, rechargeTarget, netAmount, deltaW);
+        executor.forward(merchant, accountOwner, rechargeTarget, netAmount);
     }
 
     function trade(
@@ -157,7 +149,7 @@ contract MerchantBaseTest is Test {
     }
 
     function testTradeCallbackReadsMultiplierWhileMarketLockIsActive() public {
-        market.executeTradeCallback(executor, address(merchant), alice, 7, 99e6, 10e6);
+        market.executeTradeCallback(executor, address(merchant), alice, 7, 99e6);
 
         (uint256 ownerReceived, uint256 ownerReleased) = merchant.accountOwnerFlow(alice, 40000);
         (uint256 businessReceived, uint256 businessReleased) = merchant.businessFlow(40000);
@@ -168,15 +160,14 @@ contract MerchantBaseTest is Test {
         assertEq(merchant.lastRechargeTarget(), 7);
         assertEq(merchant.lastCapacityMultiplier(), 40000);
         assertEq(merchant.lastNetAmount(), 99e6);
-        assertEq(merchant.lastDeltaW(), 10e6);
     }
 
     function testMultipleOwnersAndMultipliersAccumulateSeparately() public {
         merchant.setAccountOwnerSupport(bob, true);
         market.setAccount(2, bob, address(merchant), 20000, true);
 
-        market.executeTradeCallback(executor, address(merchant), alice, 9, 100e6, 1);
-        market.executeTradeCallback(executor, address(merchant), bob, 9, 50e6, 1);
+        market.executeTradeCallback(executor, address(merchant), alice, 9, 100e6);
+        market.executeTradeCallback(executor, address(merchant), bob, 9, 50e6);
 
         (uint256 aliceReceived,) = merchant.accountOwnerFlow(alice, 40000);
         (uint256 bobReceived,) = merchant.accountOwnerFlow(bob, 20000);
@@ -192,13 +183,13 @@ contract MerchantBaseTest is Test {
         market.setAccount(2, bob, address(merchant), 20000, true);
 
         vm.expectRevert("Unsupported account owner");
-        market.executeTradeCallback(executor, address(merchant), bob, 3, 10e6, 1);
+        market.executeTradeCallback(executor, address(merchant), bob, 3, 10e6);
 
         merchant.setAccountOwnerSupport(bob, true);
         market.setAccount(2, bob, address(merchant), 20000, false);
 
         vm.expectRevert("Market account not active");
-        market.executeTradeCallback(executor, address(merchant), bob, 3, 10e6, 1);
+        market.executeTradeCallback(executor, address(merchant), bob, 3, 10e6);
         (uint256 ownerReceived,) = merchant.accountOwnerFlow(bob, 20000);
         (uint256 businessReceived,) = merchant.businessFlow(20000);
         assertEq(ownerReceived, 0);
@@ -206,7 +197,7 @@ contract MerchantBaseTest is Test {
     }
 
     function testSupportedAccountOwnerCanReleaseOnlyItsReceivedAmount() public {
-        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6, 1);
+        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6);
 
         vm.prank(alice);
         merchant.tradeOut(alice, 1, 8, 12, 40e6, "");
@@ -228,7 +219,7 @@ contract MerchantBaseTest is Test {
     }
 
     function testBusinessCanReleaseOnlyItsReceivedAmount() public {
-        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6, 1);
+        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6);
 
         vm.prank(business);
         merchant.tradeOut(alice, 1, 8, 12, 60e6, "");
@@ -247,7 +238,7 @@ contract MerchantBaseTest is Test {
     function testAccountOwnerCannotReleaseThroughAnotherOwnersAccount() public {
         merchant.setAccountOwnerSupport(bob, true);
         market.setAccount(2, bob, address(merchant), 20000, true);
-        market.executeTradeCallback(executor, address(merchant), bob, 7, 100e6, 1);
+        market.executeTradeCallback(executor, address(merchant), bob, 7, 100e6);
 
         vm.prank(alice);
         vm.expectRevert("Only account owner or business");
@@ -255,14 +246,14 @@ contract MerchantBaseTest is Test {
     }
 
     function testOwnableAdminHasNoImplicitTradeOutAuthority() public {
-        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6, 1);
+        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6);
 
         vm.expectRevert("Only account owner or business");
         merchant.tradeOut(alice, 1, 8, 12, 1, "");
     }
 
     function testChangedMultiplierCannotReleaseAbsorptionFromOldBucket() public {
-        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6, 1);
+        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6);
         market.setMultiplier(1, 30000);
 
         vm.prank(alice);
@@ -275,7 +266,7 @@ contract MerchantBaseTest is Test {
     }
 
     function testBuyerMustMatchBuyerAccountOwner() public {
-        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6, 1);
+        market.executeTradeCallback(executor, address(merchant), alice, 7, 100e6);
 
         vm.prank(alice);
         vm.expectRevert("Buyer/account mismatch");
@@ -313,8 +304,8 @@ contract MerchantBaseTest is Test {
     }
 
     function testFractionalReceiptsAccumulateBeforeApplyingShare() public {
-        market.executeTradeCallback(executor, address(merchant), alice, 1, 1, 1);
-        market.executeTradeCallback(executor, address(merchant), alice, 1, 2, 2);
+        market.executeTradeCallback(executor, address(merchant), alice, 1, 1);
+        market.executeTradeCallback(executor, address(merchant), alice, 1, 2);
         vm.prank(alice);
         merchant.tradeOut(alice, 1, 8, 1, 1, ""); // floor(3 * 40%) = 1
         vm.prank(business);
@@ -354,8 +345,8 @@ contract MerchantBaseTest is Test {
         platform.setAccountOwnerSupport(bob, true);
         market.setAccount(11, alice, address(platform), 40000, true);
         market.setAccount(12, bob, address(platform), 40000, true);
-        market.executeTradeCallback(executor, address(platform), alice, 1, receivedA, 0);
-        market.executeTradeCallback(executor, address(platform), bob, 1, receivedB, 0);
+        market.executeTradeCallback(executor, address(platform), alice, 1, receivedA);
+        market.executeTradeCallback(executor, address(platform), bob, 1, receivedB);
         uint256 aLimit = receivedA * ownerShare / 10000;
         uint256 bLimit = receivedB * ownerShare / 10000;
         uint256 businessLimit = (receivedA + receivedB) * (10000 - ownerShare) / 10000;

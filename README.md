@@ -4,33 +4,31 @@ English · [中文](README.zh.md)
 
 ## Protocol summary
 
-Onchain Tariff Market is a decentralized on-chain marketplace that uses dynamic, refundable retention and governance by both buyers and sellers to keep funds circulating.
+Onchain Tariff Market is a decentralized on-chain marketplace that uses deposit-backed surplus limits and governance by both buyers and sellers to keep funds circulating.
 
-Part of each sale's proceeds is retained, and retained funds are returned in full through later purchases. The protocol applies a dynamic retention to net selling surplus. As a seller's surplus rises, it temporarily retains part of new sale proceeds. Later purchases by the same participant reduce that surplus and return held funds accordingly. Once the surplus reaches zero, all retained funds are returned.
+Every seller account posts a deposit. Its net selling surplus may grow only up to a capacity proportional to that deposit, and the deposit can be withdrawn only after the surplus has been spent back to zero. The seller receives all proceeds after the rights fee; the deposit carries the commitment to keep funds moving.
 
 Each trade pays a rights fee of about 1% to the public Vault and mints non-transferable governance seats for the buyer and seller sides. Seats become active in the next round; both sides vote on market entry rules, account eviction, and the use of shared funds.
 
 ### Design strengths
 
-- **Atomic, account-level accounting:** Each economic account keeps its own deposit, net surplus, and funds actually retained. A trade settles both sides' records, funds, and rights together; a failure reverts the whole trade.
-- **A path for funds to circulate:** Growing sale surplus triggers dynamic retention, while later purchases release held funds. This gives sale proceeds a route back into trade and reduces long-lived accumulation from one-way surpluses.
+- **Atomic, account-level accounting:** Each economic account keeps its own deposit, net balance, and deferred surplus. A trade settles both sides' records, funds, and rights together; a failure reverts the whole trade.
+- **A path for funds to circulate:** Surplus is capped by the deposit, and the deposit stays locked until the surplus returns to zero. Sellers therefore have a standing reason to spend proceeds back into the market instead of accumulating one-way surpluses.
 - **Dual-sided governance and decentralization:** Trades generate rights on both sides. Market rules, account eviction, and public Vault purchases are executed through on-chain governance, reducing reliance on centralized operation for market access and the allocation of shared funds.
 
 ## 1. System overview
 
-Onchain Tariff Market records commerce in one settlement token. Each economic account binds an immutable Account Owner–Merchant pair. Selling creates a surplus; buying reduces a surplus or creates a deficit. Positive surplus is constrained by a deposit-backed capacity and a dynamic retention. When that account later buys, retained funds can offset its payment within the protocol's rules.
+Onchain Tariff Market records commerce in one settlement token. Each economic account binds an immutable Account Owner–Merchant pair. Selling creates a surplus; buying reduces a surplus or creates a deficit. Positive surplus is limited by a deposit-backed capacity, and the deposit is released only after the surplus is gone.
 
-Each trade also pays a rights fee of about 1% to the public Vault. The trade mints annual seats for the Account Owners on the buyer and seller sides. Seats begin voting in the next round, and both sides must participate in governing the Market. The design makes sustained surplus bear a stronger capital requirement while rotating governance weight toward recent participants.
+Each trade also pays a rights fee of about 1% to the public Vault. The trade mints annual seats for the Account Owners on the buyer and seller sides. Seats begin voting in the next round, and both sides must participate in governing the Market. The design makes sustained surplus bear a capital requirement while rotating governance weight toward recent participants.
 
-“Tariff” in the project name is a brand, not a description of a tax. The mechanism is a temporary, refundable retention of sale proceeds inside the protocol; it is not a legal tax and is not protocol revenue. Rights are minted in proportion to protocol trading volume.
-
-Some code identifiers keep historical names: `taxableSurplus` is the Retainable Surplus, `curveTax` / `accountCurveTax` quote the retention curve, `baseTaxRate` is the base retention rate, `sellerPoints` holds retained funds, and the `TaxRefunded` event reports retained funds being returned.
+"Tariff" in the project name is a brand, not a description of a tax. The protocol takes no cut of sale proceeds other than the 1% rights fee. Rights are minted in proportion to protocol trading volume.
 
 ## 2. Core architecture
 
 | Layer | Contracts | Responsibility |
 | --- | --- | --- |
-| Settlement | `ERC20SettlementAsset`, `Market`, `TradeExecutor` | Hold one settlement token, track account balances and retained funds, deliver actual proceeds to Merchants. |
+| Settlement | `ERC20SettlementAsset`, `Market`, `TradeExecutor` | Hold one settlement token and deposits, track account balances and capacity, deliver proceeds to Merchants. |
 | Merchant | `MerchantBase`, `SimpleMerchantBase` | Contract Merchant callbacks and release allowances for multiple accounts or one fixed account. EOAs use neither base contract. |
 | Rights | Buyer and seller `ProportionalElection` contracts, annual `SeatToken` contracts | Mint non-transferable seats and normalize voting power by round. |
 | Decisions | `FinalGovernor`, Timelock, `Vault` | Count both sides, execute governance decisions, and purchase from an approved public-funds list. |
@@ -40,24 +38,25 @@ The main path of a trade is:
 ```text
 Payer → Market.trade → SettlementAsset pulls funds
                      ├─ about 1% rights fee → Vault
-                     ├─ new seller retention → held for possible refund
-                     └─ actual proceeds deltaW → seller Merchant
-                                                    └─ tradeIn callback for a contract Merchant
+                     └─ netAmount (the rest) → seller Merchant
+                                                  └─ tradeIn callback for a contract Merchant
 ```
 
 ### Accounts and trades
 
-The Account Owner registers an `(owner, merchant)` pair with a deposit and receives a numeric accountId. The account cannot be transferred. One Merchant can serve multiple owners; each account has separate deposit, balance, and retention records. The Account Owner controls its multiplier and receives rights; the Merchant receives trade proceeds. A third party may be the Payer (`msg.sender`), but payment does not grant access to the buyer account's retention refund.
+The Account Owner registers an `(owner, merchant)` pair with a deposit and receives a numeric accountId. The account cannot be transferred. One Merchant can serve multiple owners; each account has separate deposit, balance, and deferred-surplus records. The Account Owner controls its multiplier, receives rights, and gets the deposit back; the Merchant receives trade proceeds. A third party may be the Payer (`msg.sender`) for any buyer account.
 
-`buyerAccountId = 0` is a Market-only default buyer path: it creates or reuses the `(buyer, buyer)` account. An inactive default account can pay and record a deficit, but cannot receive as a seller. A contract Merchant's `tradeOut` requires both an active source account and an active destination seller account.
+`buyerAccountId = 0` is a Market-only default buyer path: it creates or reuses the `(buyer, buyer)` account. An inactive default account can pay and record a deficit, but cannot receive as a seller. Its first trade must be self-paid and pins the first seller's tier; later purchases must use that tier or a stricter one. A contract Merchant's `tradeOut` requires both an active source account and an active destination seller account.
 
-### Retention and deposit
+### Capacity and deposit
 
-A trade first computes `vaultFee = floor(amount / 100)` and `tradeValue = amount - vaultFee`. The buyer's net balance decreases by `tradeValue`, and the seller's increases by the same amount. The seller's target cumulative retention uses positive net balance plus unreleased deferred surplus. `sellerPoints` is the amount actually retained and not yet refunded. If a small sale cannot collect the full shortfall, it retains at most that sale's `tradeValue` and collects the rest from later sales.
+A trade computes `vaultFee = floor(amount / 100)` and `netAmount = amount - vaultFee`. The buyer's net balance decreases by `netAmount`, the seller's increases by the same amount, and the seller Merchant receives `netAmount` immediately.
 
-Deposit-backed capacity is `deposit × capacityMultiplier / 10000`. A lower multiplier is a stricter tier. An active buyer account may pay only a seller at the same or a stricter tier. Its owner may lower the multiplier but cannot raise it; anyone may fully fund a deposit increase.
+The Effective Surplus of an account is its positive net balance plus its current deferred surplus. A sale reverts with `Capacity exceeded` if it would push the seller's Effective Surplus above its capacity, `deposit × capacityMultiplier / 10000` (`capacityOf`). A lower multiplier is a stricter tier. An active buyer account may pay only a seller at the same or a stricter tier. Its owner may lower the multiplier but cannot raise it; anyone may fully fund a deposit increase, which raises capacity immediately.
 
-If a purchase simultaneously reduces the buyer's surplus and the seller's deficit, the overlapping amount becomes deferred surplus on the buyer account. It releases over time at a deposit-based rate. A qualifying later purchase may use retained funds to reduce the amount pulled from the Merchant, up to that purchase's `tradeValue`. The 1% rights fee remains payable.
+If a purchase simultaneously reduces the buyer's surplus and the seller's deficit, the overlapping amount becomes deferred surplus on the buyer account. It still counts toward capacity and still blocks deposit withdrawal, and it releases linearly over time at a deposit-based rate. This keeps bots from netting many accounts' surpluses and deficits against each other to free deposits at once.
+
+The deposit is withdrawn in two steps. The Account Owner requests withdrawal when net balance is at most zero and deferred surplus is zero; the account freezes immediately, and the principal can be claimed after 180 days. Governance may kick an account instead, slashing at most its Effective Surplus from the deposit to the Vault and returning the rest to the Account Owner.
 
 ### Seats and governance
 
@@ -69,7 +68,7 @@ The Vault receives rights fees and governance slashes. It buys through individua
 
 ## 3. Reading guide
 
-- [Market mechanism](docs/market-mechanism-en.md): accounts, retention curve, deferred surplus, exit, Vault, and governance.
+- [Market mechanism](docs/market-mechanism-en.md): accounts, capacity, deferred surplus, exit, Vault, and governance.
 - [MerchantBase integration](docs/merchantbase-integration-en.md): multiple owners and multiplier buckets.
 - [SimpleMerchantBase integration](docs/simple-merchantbase-en.md): one account, one fixed tier, and two fixed release shares.
 - [Domain language](CONTEXT.md): boundaries between Account Owner, Merchant, Payer, and other identities.

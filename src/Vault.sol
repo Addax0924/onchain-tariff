@@ -73,7 +73,9 @@ contract Vault is IMerchantTradeIn, ReentrancyGuard {
         return tradeOrders.length;
     }
 
-    /** @notice Set or tighten the Vault's independent spending limit. */
+    /**
+     * @notice Set or tighten the Vault's independent spending limit.
+     */
     function setCapacityMultiplierLimit(uint256 newMultiplier) external onlyGovernance {
         require(newMultiplier >= 1000, "Invalid capacity multiplier");
         uint256 oldLimit = capacityMultiplierLimit;
@@ -88,7 +90,9 @@ contract Vault is IMerchantTradeIn, ReentrancyGuard {
         emit CapacityMultiplierLimitUpdated(oldLimit, newMultiplier);
     }
 
-    /** @notice Governance may submit a list in multiple transactions if it is too large for one block. */
+    /**
+     * @notice Governance may submit a list in multiple transactions if it is too large for one block.
+     */
     function queueTrades(TradeInput[] calldata inputs) external onlyGovernance {
         for (uint256 i = 0; i < inputs.length; ++i) {
             TradeInput calldata input = inputs[i];
@@ -117,7 +121,9 @@ contract Vault is IMerchantTradeIn, ReentrancyGuard {
         emit TradeCanceled(orderId);
     }
 
-    /** @notice Anyone may execute an approved order; neither the destination nor terms are caller-controlled. */
+    /**
+     * @notice Anyone may execute an approved order; neither the destination nor terms are caller-controlled.
+     */
     function executeTrade(uint256 orderId) external nonReentrant {
         require(orderId < tradeOrders.length, "Unknown order");
         TradeOrder storage order = tradeOrders[orderId];
@@ -136,8 +142,10 @@ contract Vault is IMerchantTradeIn, ReentrancyGuard {
         emit TradeExecuted(orderId, order.sellerAccountId, order.amount);
     }
 
-    /** @dev A Vault sale would create surplus, so it can never act as a seller. */
-    function tradeIn(address, uint160, uint256, uint256, bytes calldata) external pure override {
+    /**
+     * @dev A Vault sale would create surplus, so it can never act as a seller.
+     */
+    function tradeIn(address, uint160, uint256, bytes calldata) external pure override {
         revert("Vault cannot sell");
     }
 }

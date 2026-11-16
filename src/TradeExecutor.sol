@@ -23,22 +23,15 @@ contract TradeExecutor {
         address rightsOwner,
         uint160 rechargeTarget,
         uint256 netAmount,
-        uint256 deltaW,
         bytes calldata data
     ) external {
         require(msg.sender == market, "Only market can call");
         require(target != market, "Cannot call back to own market");
 
-        settlementAsset.push(target, deltaW);
+        settlementAsset.push(target, netAmount);
 
         if (target.code.length > 0) {
-            IMerchantTradeIn(target).tradeIn(
-                rightsOwner,
-                rechargeTarget,
-                netAmount,
-                deltaW,
-                data
-            );
+            IMerchantTradeIn(target).tradeIn(rightsOwner, rechargeTarget, netAmount, data);
         }
     }
 }
