@@ -52,11 +52,11 @@ The Account Owner registers an `(owner, merchant)` pair with a deposit and recei
 
 A trade computes `vaultFee = floor(amount / 100)` and `netAmount = amount - vaultFee`. The buyer's net balance decreases by `netAmount`, the seller's increases by the same amount, and the seller Merchant receives `netAmount` immediately.
 
-The Effective Surplus of an account is its positive net balance plus its current deferred surplus. A sale reverts with `Capacity exceeded` if it would push the seller's Effective Surplus above its capacity, `deposit × capacityMultiplier / 10000` (`capacityOf`). A lower multiplier is a stricter tier. An active buyer account may pay only a seller at the same or a stricter tier. Its owner may lower the multiplier but cannot raise it; anyone may fully fund a deposit increase, which raises capacity immediately.
+The Effective Surplus of an account is its positive net balance plus its current deferred surplus. A sale reverts with `Capacity exceeded` if it would push the seller's Effective Surplus above its capacity, `deposit × capacityMultiplier / 10000` (`capacityOf`). A lower multiplier is a stricter tier. An active buyer account may pay only a seller at the same or a stricter tier. Its owner may keep or lower the multiplier. Anyone can add deposit. The portion left after paying outstanding holding fees increases capacity.
 
 If a purchase simultaneously reduces the buyer's surplus and the seller's deficit, the overlapping amount becomes deferred surplus on the buyer account. It still counts toward capacity and still blocks deposit withdrawal, and it releases linearly over time at a deposit-based rate. This keeps bots from netting many accounts' surpluses and deficits against each other to free deposits at once.
 
-The deposit is withdrawn in two steps. The Account Owner requests withdrawal when net balance is at most zero and deferred surplus is zero; the account freezes immediately, and the principal can be claimed after 180 days. Governance may kick an account instead, slashing at most its Effective Surplus from the deposit to the Vault and returning the rest to the Account Owner.
+The deposit is withdrawn in two steps. The Account Owner requests withdrawal after settling fees, once net balance is at most zero and both deferred surplus and fee debt are zero. The account freezes immediately, and the remaining principal can be claimed after 180 days. Governance may kick an account instead, slashing at most its Effective Surplus from the deposit to the Vault and returning the rest to the Account Owner.
 
 ### Seats and governance
 
@@ -85,7 +85,7 @@ forge test
 
 `script/Deploy.s.sol` shows the full proxy, dual-election, Timelock, Governor, Market, Vault, executor, and permission-transfer path. `script/DeployMock.s.sol` deploys a local six-decimal test token. The deployment script reads a private key and settlement-token address and writes contract addresses to `.env`; review the target chain and environment before running it. When `DEPLOYMENT_OUTPUT` is set to a prefix under `deployments/` (for example `deployments/local`), both scripts instead write `<prefix>.mock.json` and `<prefix>.json` and neither read nor write `.env`. `script/Interact.s.sol` is currently a commented-out legacy example and is not an interface guide.
 
-Source, interfaces, and tests define the behavior; this README is a starting point. The current implementation is an independent, single-token Market without a multi-token router or surplus holding fee.
+The current implementation is an independent, single-token Market. The governance-controlled surplus holding fee starts at 0%.
 
 ## 5. Disclaimer
 

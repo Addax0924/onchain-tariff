@@ -36,7 +36,7 @@ The owner calls `registerMerchant(merchant, deposit, multiplier)` to activate a 
 capacity = floor(deposit × capacityMultiplier / 10000)
 ```
 
-Positive balance plus deferred surplus must fit inside capacity. A smaller multiplier means a stricter tier and less surplus per unit of deposit. Anyone may pay the full amount of a deposit increase; this raises capacity immediately and accelerates deferred-surplus release only from that point forward. Only the owner can maintain or lower the multiplier. An existing deficit cannot be moved into a stricter tier, and a multiplier reduction must still cover current Effective Surplus.
+Positive balance plus deferred surplus must fit inside capacity. A smaller multiplier means a stricter tier and less surplus per unit of deposit. Anyone may fund a deposit increase. After covering unpaid holding fees, any remainder raises capacity and accelerates deferred-surplus release from that point forward. Only the owner can maintain or lower the multiplier. An existing deficit cannot be moved into a stricter tier, and a multiplier reduction must still cover current Effective Surplus.
 
 `buyerAccountId = 0` is a Market instruction, not an actual account ID. Market finds or creates the `(buyer, buyer)` Default Buyer Account. If that pair is already active, ID zero reuses its deposit and tier. An inactive default account may pay, accumulate a deficit, and receive buyer rights, but cannot sell. Its first trade must be paid by the buyer, and that first seller's multiplier pins the buyer tier. Later purchases may go to the same or a stricter tier; a stricter purchase does not silently change the pinned tier. Active buyer accounts likewise require `sellerMultiplier <= buyerMultiplier`. An explicit buyerAccountId must belong to `buyer`. A seller account must always be active.
 
@@ -52,6 +52,14 @@ capacityOf(accountId)       = floor(deposit × capacityMultiplier / 10000)
 ```
 
 A sale may fill capacity exactly. If the resulting Effective Surplus exceeds capacity, the entire trade reverts with `Capacity exceeded`; there is no partial execution or automatic deposit increase. A purchase reduces the buyer's real balance, while the matched portion described below continues to occupy capacity as Deferred Surplus. Neither view is a token balance or a claim on sale proceeds.
+
+### Surplus holding fee
+
+Governance sets an annual rate between 0% and 100% through `setHoldingFeeRate`. The rate starts at 0%. Only ordinary positive surplus accrues fees. While collateral covers the fee, the calculation follows the continuously declining surplus. After the collateral is exhausted, the remaining positive surplus accrues unpaid fees at the configured rate. Unpaid fees do not themselves accrue fees.
+
+Market pays the fee from the account's deposit to Vault and reduces the account's ordinary positive surplus by the amount paid, stopping at zero. `holdingFeeOf` previews the amount collectible now and the debt that would remain. `capacityOf` and `effectiveSurplus` include the projected deduction. Anyone can call `settleHoldingFee`. Deferred surplus release uses each recorded deposit until it changes at settlement or deposit increase.
+
+Payment may put the account over capacity. The account can still buy, and sale validation uses the seller's post-fee capacity and surplus. Deposit increases pay outstanding fees first. Voluntary exit requires zero debt, a nonpositive net balance, and zero deferred surplus. A governance kick settles fees before the slash and records any debt written off.
 
 ## 4. Deferred surplus slows matched balance resolution
 
@@ -69,7 +77,7 @@ Deferred surplus declines linearly with deposit and time. Initially `resolutionR
 
 ## 5. Withdrawal, eviction, and the public Vault
 
-The account owner may request withdrawal of the entire deposit when real net balance is nonpositive and deferred surplus is zero. The request immediately freezes the account: it cannot buy, sell, add deposit, or change multiplier; pending principal no longer provides capacity. After exactly `180 days`, the owner claims the principal. The claim deletes the account and pair mapping; re-registration gets a new ID. There is currently no cancel or early-unfreeze entry point.
+After fees settle, the account owner may request withdrawal of the remaining deposit when real net balance is nonpositive and both deferred surplus and fee debt are zero. The request immediately freezes the account: it cannot buy, sell, add deposit, or change multiplier; pending principal no longer provides capacity. After exactly `180 days`, the owner claims the principal. The claim deletes the account and pair mapping; re-registration gets a new ID. There is currently no cancel or early-unfreeze entry point.
 
 `kickMerchant(accountId)` is restricted to Market's `governance` address, which the deployment flow sets to the Timelock. It slashes `min(effectiveSurplus(accountId), deposit plus pending withdrawal principal)` from the deposit. The slash goes to the Vault; leftover deposit goes to the Account Owner. Then the account and pending claim are deleted. Sale proceeds already paid to the Merchant are not clawed back. Other owner accounts sharing the same Merchant remain separate.
 
@@ -92,4 +100,4 @@ The Governor takes the smaller buyer/seller count separately for For, Against, a
 - `test/SettlementConservationTest.t.sol`: full funding and net settlement, fee rounding, exact capacity, and callback rollback.
 - [MerchantBase integration](merchantbase-integration-en.md): contract Merchant payment and release interfaces.
 
-The current code is a single-token, independent Market. It has no surplus holding fee, old point-offset claim function, or multi-token router.
+The current code is an independent, single-token Market.

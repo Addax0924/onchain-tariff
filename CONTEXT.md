@@ -41,8 +41,8 @@ _Avoid_: Buyer
 
 **Deposit Increase**:
 A permissionless, fully funded increase to a Market Account's deposit. It
-raises capacity immediately and accelerates deferred-surplus release only from
-the time of the increase onward. The whole deposit returns to the Account Owner.
+first covers any unpaid Surplus Holding Fee. The remainder raises capacity and
+accelerates deferred-surplus release from the time of the increase onward.
 _Avoid_: Deposit credit
 
 **Deferred Surplus**:
@@ -67,6 +67,12 @@ to an active buyer account may only flow to a seller account with an equal or
 lower multiplier. Inactive Default Buyer Accounts follow their first seller's
 pinned tier and may subsequently buy only at that tier or a stricter one.
 _Avoid_: Global capacity
+
+**Surplus Holding Fee**:
+A time-based charge on ordinary positive net trade balance. Market pays it
+from the account's deposit to Vault and reduces positive trade balance by the
+amount paid, up to zero. Unpaid charges remain account debt. The annual rate
+starts at zero. Deferred Surplus is outside the fee base.
 
 **Merchant Release Shares**:
 The MerchantBase instance fixes Account Owner and Business shares at
@@ -102,8 +108,9 @@ reminting cannot rewrite that timestamp's weight. At most five rounds are read.
 
 **Deposit Withdrawal**:
 Only the Account Owner may request withdrawal of the entire effective deposit.
-The real net trade balance must be nonpositive and current Deferred Surplus must
-be zero. The request moves all deposit into a pending withdrawal with a
+After fee settlement, the real net trade balance must be nonpositive and both
+current Deferred Surplus and holding fee debt must be zero. The request moves
+all remaining deposit into a pending withdrawal with a
 fixed 180-day delay; it immediately stops providing capacity or deferred release.
 The account retains its registered/active identity, multiplier and deficit,
 but isAccountFrozen becomes true immediately. Frozen accounts cannot participate

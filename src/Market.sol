@@ -17,6 +17,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     uint256 public constant MIN_CAPACITY_MULTIPLIER = 1000;
     uint256 public constant RESOLUTION_PERIOD = 30 days;
     uint256 public constant DEPOSIT_WITHDRAWAL_DELAY = 180 days;
+    uint256 private constant HOLDING_FEE_YEAR = 365 days;
 
     ISettlementAsset public settlementAsset;
     IRightsToken public buyerRights;
@@ -46,6 +47,15 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         uint256 availableAt;
     }
 
+    struct HoldingFeeAccount {
+        uint256 surplus;
+        uint256 collateral;
+        uint256 rateIndex;
+        uint256 accrued;
+        uint256 remainder;
+        uint256 debt;
+    }
+
     uint256 public nextAccountId;
     mapping(uint256 => MarketAccount) public accounts;
     mapping(address => mapping(address => uint256)) public accountIdOf;
@@ -61,6 +71,11 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
     // Pending funds no longer provide capacity or release deferred surplus.
     mapping(uint256 => DepositWithdrawal) public depositWithdrawals;
     mapping(uint256 => bool) public isAccountFrozen;
+
+    uint256 public holdingFeeRateBps;
+    uint256 private _holdingFeeIndex;
+    uint256 private _holdingFeeIndexUpdatedAt;
+    mapping(uint256 => HoldingFeeAccount) private _holdingFees;
 
     modifier notFromExecutor() {
         require(msg.sender != executor, "Executor cannot trigger trade");
@@ -103,6 +118,9 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         int256 newMerchantBalance
     );
     event TradeBalanceUpdated(uint256 indexed accountId, int256 netTradeBalance);
+    event HoldingFeeRateUpdated(uint256 oldRateBps, uint256 newRateBps);
+    event HoldingFeeSettled(uint256 indexed accountId, uint256 paid, uint256 remainingDebt);
+    event HoldingFeeDebtWrittenOff(uint256 indexed accountId, uint256 amount);
     event MerchantKicked(
         uint256 indexed accountId,
         address indexed owner,
@@ -131,6 +149,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         nextAccountId = 1;
         resolutionRatio = 5000;
         resolutionIndexUpdatedAt = block.timestamp;
+        _holdingFeeIndexUpdatedAt = block.timestamp;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -188,13 +207,130 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
 
     /// @notice Effective Surplus: positive real balance plus current deferred surplus.
     function effectiveSurplus(uint256 accountId) public view returns (uint256) {
-        return _positive(netTradeBalance[accountId]) + deferredSurplus(accountId);
+        (uint256 paid,) = holdingFeeOf(accountId);
+        uint256 positiveBalance = _positive(netTradeBalance[accountId]);
+        return positiveBalance - _min(positiveBalance, paid) + deferredSurplus(accountId);
     }
 
     /// @notice Deposit-backed capacity: deposit * capacityMultiplier / BPS.
     function capacityOf(uint256 accountId) public view returns (uint256) {
         MarketAccount storage account = accounts[accountId];
-        return _capacity(account.deposit, account.capacityMultiplier);
+        (uint256 paid,) = holdingFeeOf(accountId);
+        return _capacity(account.deposit - paid, account.capacityMultiplier);
+    }
+
+    /// @notice Amount collectible from the deposit now, and debt that would remain after collection.
+    function holdingFeeOf(uint256 accountId) public view returns (uint256 collectible, uint256 debt) {
+        HoldingFeeAccount storage fee = _holdingFees[accountId];
+        (uint256 accrued,) = _previewHoldingFee(fee);
+        uint256 due = fee.debt + (accrued - fee.accrued);
+        collectible = _min(accounts[accountId].deposit, due);
+        debt = due - collectible;
+    }
+
+    function settleHoldingFee(uint256 accountId) external nonReentrant {
+        require(accounts[accountId].isActive, "Merchant account not active");
+        _settleHoldingFee(accountId);
+    }
+
+    function setHoldingFeeRate(uint256 newRateBps) external onlyOwner {
+        require(newRateBps <= BPS, "Invalid holding fee rate");
+        _holdingFeeIndex = _currentHoldingFeeIndex();
+        _holdingFeeIndexUpdatedAt = block.timestamp;
+        emit HoldingFeeRateUpdated(holdingFeeRateBps, newRateBps);
+        holdingFeeRateBps = newRateBps;
+    }
+
+    function _currentHoldingFeeIndex() private view returns (uint256) {
+        return _holdingFeeIndex + holdingFeeRateBps * (block.timestamp - _holdingFeeIndexUpdatedAt);
+    }
+
+    function _min(uint256 a, uint256 b) private pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
+    function _previewHoldingFee(HoldingFeeAccount storage fee)
+        private
+        view
+        returns (uint256 accrued, uint256 remainder)
+    {
+        remainder = fee.remainder;
+        uint256 surplus = fee.surplus;
+        if (surplus == 0) return (0, remainder);
+
+        uint256 rateTime = _currentHoldingFeeIndex() - fee.rateIndex;
+        if (rateTime == 0) return (0, remainder);
+        uint256 exposure = FixedPointMathLib.fullMulDiv(rateTime, WAD, BPS * HOLDING_FEE_YEAR);
+        uint256 feeFactor;
+        uint256 collateral = fee.collateral;
+
+        // While funded, dS/d(exposure) = -S. After exhaustion, the remaining S accrues simple debt.
+        if (collateral == 0) {
+            feeFactor = exposure;
+        } else if (collateral < surplus) {
+            uint256 unfundedSurplus = surplus - collateral;
+            uint256 exhaustion =
+                uint256(FixedPointMathLib.lnWad(int256(surplus)) - FixedPointMathLib.lnWad(int256(unfundedSurplus)));
+            if (exposure >= exhaustion) {
+                accrued = collateral;
+                surplus = unfundedSurplus;
+                feeFactor = exposure - exhaustion;
+            } else {
+                feeFactor = _fundedFeeFactor(exposure);
+            }
+        } else {
+            feeFactor = _fundedFeeFactor(exposure);
+        }
+
+        accrued += FixedPointMathLib.fullMulDiv(surplus, feeFactor, WAD);
+        remainder += mulmod(surplus, feeFactor, WAD);
+        return (accrued + remainder / WAD, remainder % WAD);
+    }
+
+    function _fundedFeeFactor(uint256 exposure) private pure returns (uint256) {
+        // exp(-60) rounds to zero at WAD precision.
+        if (exposure >= 60 * WAD) return WAD;
+        return WAD - uint256(FixedPointMathLib.expWad(-int256(exposure)));
+    }
+
+    function _settleHoldingFee(uint256 accountId) private {
+        HoldingFeeAccount storage fee = _holdingFees[accountId];
+        (uint256 accrued,) = _previewHoldingFee(fee);
+        uint256 newFee = accrued - fee.accrued;
+        if (newFee != 0) {
+            fee.accrued = accrued;
+            fee.debt += newFee;
+        }
+        _payHoldingFee(accountId, newFee);
+    }
+
+    function _payHoldingFee(uint256 accountId, uint256 newFee) private {
+        HoldingFeeAccount storage fee = _holdingFees[accountId];
+        MarketAccount storage account = accounts[accountId];
+        uint256 paid = _min(account.deposit, fee.debt);
+        if (paid != 0) {
+            _syncDeferredSurplus(accountId);
+            account.deposit -= paid;
+            fee.debt -= paid;
+            int256 balance = netTradeBalance[accountId];
+            uint256 surplusReduction = _min(_positive(balance), paid);
+            if (surplusReduction != 0) {
+                netTradeBalance[accountId] = balance - int256(surplusReduction);
+                emit TradeBalanceUpdated(accountId, netTradeBalance[accountId]);
+            }
+            settlementAsset.push(vault, paid);
+        }
+        if (newFee != 0 || paid != 0) emit HoldingFeeSettled(accountId, paid, fee.debt);
+    }
+
+    function _checkpointHoldingFee(uint256 accountId) private {
+        HoldingFeeAccount storage fee = _holdingFees[accountId];
+        (, uint256 remainder) = _previewHoldingFee(fee);
+        fee.surplus = _positive(netTradeBalance[accountId]);
+        fee.collateral = accounts[accountId].deposit;
+        fee.rateIndex = _currentHoldingFeeIndex();
+        fee.accrued = 0;
+        fee.remainder = remainder;
     }
 
     function _capacity(uint256 deposit, uint256 capacityMultiplier) internal pure returns (uint256) {
@@ -328,9 +464,12 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         require(account.isActive, "Merchant account not active");
         require(!isAccountFrozen[accountId], "Account frozen");
 
+        _settleHoldingFee(accountId);
         _syncDeferredSurplus(accountId);
         settlementAsset.pull(msg.sender, amount);
         account.deposit += amount;
+        _payHoldingFee(accountId, 0);
+        _checkpointHoldingFee(accountId);
 
         emit MerchantDepositIncreased(accountId, msg.sender, amount, account.deposit);
     }
@@ -339,8 +478,9 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         MarketAccount storage account = accounts[accountId];
         require(account.isActive, "Merchant account not active");
         require(msg.sender == account.owner, "Only account owner");
-        require(depositWithdrawals[accountId].amount == 0, "Deposit withdrawal pending");
-        require(account.deposit > 0, "Deposit required");
+        require(depositWithdrawals[accountId].availableAt == 0, "Deposit withdrawal pending");
+        _settleHoldingFee(accountId);
+        require(_holdingFees[accountId].debt == 0, "Outstanding holding fee");
         require(netTradeBalance[accountId] <= 0, "Outstanding surplus");
         require(_syncDeferredSurplus(accountId) == 0, "Outstanding deferred surplus");
 
@@ -349,6 +489,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         account.deposit = 0;
         depositWithdrawals[accountId] = DepositWithdrawal(amount, availableAt);
         isAccountFrozen[accountId] = true;
+        delete _holdingFees[accountId];
 
         // Preserve the account while pending, but block both trade directions until deletion.
         emit DepositWithdrawalRequested(accountId, account.owner, amount, availableAt);
@@ -358,7 +499,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         MarketAccount memory account = accounts[accountId];
         require(msg.sender == account.owner, "Only account owner");
         DepositWithdrawal memory withdrawal = depositWithdrawals[accountId];
-        require(withdrawal.amount > 0, "No deposit withdrawal");
+        require(withdrawal.availableAt != 0, "No deposit withdrawal");
         require(block.timestamp >= withdrawal.availableAt, "Deposit withdrawal not ready");
 
         delete accountIdOf[account.owner][account.merchant];
@@ -374,12 +515,13 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         emit DepositWithdrawn(accountId, account.owner, withdrawal.amount);
     }
 
-    function setCapacityMultiplier(uint256 accountId, uint256 newMultiplier) external {
+    function setCapacityMultiplier(uint256 accountId, uint256 newMultiplier) external nonReentrant {
         MarketAccount storage account = accounts[accountId];
         require(account.isActive, "Merchant account not active");
         require(msg.sender == account.owner, "Only account owner");
         require(!isAccountFrozen[accountId], "Account frozen");
         require(newMultiplier >= MIN_CAPACITY_MULTIPLIER, "Invalid capacity multiplier");
+        _settleHoldingFee(accountId);
         uint256 oldMultiplier = account.capacityMultiplier;
         require(newMultiplier <= oldMultiplier, "Multiplier can only decrease");
         if (newMultiplier < oldMultiplier) {
@@ -427,6 +569,8 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
             }
         }
 
+        _settleHoldingFee(buyerAccountId);
+        _settleHoldingFee(sellerAccountId);
         TradeCalculation memory calculation;
         calculation.vaultFee = amount / 100;
         calculation.tradeValue = amount - calculation.vaultFee;
@@ -436,6 +580,8 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         netTradeBalance[sellerAccountId] = calculation.newSellerBalance;
         netTradeBalance[buyerAccountId] = calculation.newBuyerBalance;
         _addDeferredSurplus(buyerAccountId, calculation.resolvedSurplus);
+        _checkpointHoldingFee(sellerAccountId);
+        _checkpointHoldingFee(buyerAccountId);
 
         settlementAsset.pull(msg.sender, amount);
         settlementAsset.push(vault, calculation.vaultFee);
@@ -468,6 +614,7 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
 
     function kickMerchant(uint256 accountId) external nonReentrant {
         require(msg.sender == governance, "Only governance");
+        _settleHoldingFee(accountId);
         MarketAccount memory account = accounts[accountId];
         require(account.isActive, "Merchant account not active");
 
@@ -485,6 +632,9 @@ contract Market is Initializable, OwnableUpgradeable, UUPSUpgradeable, Reentranc
         delete _deferredSurplus[accountId];
         delete _deferredReleaseIndex[accountId];
         delete _deferredReleaseRemainder[accountId];
+        uint256 unpaidHoldingFee = _holdingFees[accountId].debt;
+        delete _holdingFees[accountId];
+        if (unpaidHoldingFee != 0) emit HoldingFeeDebtWrittenOff(accountId, unpaidHoldingFee);
 
         settlementAsset.push(vault, slashedAmount);
         settlementAsset.push(account.owner, ownerRefund);

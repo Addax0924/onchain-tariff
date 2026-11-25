@@ -52,11 +52,11 @@ Account Owner 注册 `(owner, merchant)` 配对账户并缴押金，获得数字
 
 每笔金额 `amount` 先计算 `vaultFee = floor(amount / 100)`，余款 `netAmount = amount - vaultFee`。买方净余额减少 `netAmount`，卖方净余额增加 `netAmount`，卖方 Merchant 立即收到全部 `netAmount`。
 
-账户的有效顺差（Effective Surplus）等于正净余额加上当前的延迟顺差。如果一笔卖出会让卖方的有效顺差超过额度 `deposit × capacityMultiplier / 10000`（可用 `capacityOf` 查询），交易以 `Capacity exceeded` 回滚。乘数越小，层级越严格。已激活买方账户只能向相同或更严格层级的卖方账户付款。账户 owner 可以调低乘数，不能调高；任何人都可以全额付款增押，额度随即提高。
+账户的有效顺差（Effective Surplus）等于正净余额加上当前的延迟顺差。如果一笔卖出会让卖方的有效顺差超过额度 `deposit × capacityMultiplier / 10000`（可用 `capacityOf` 查询），交易以 `Capacity exceeded` 回滚。乘数越小，层级越严格。已激活买方账户只能向相同或更严格层级的卖方账户付款。账户 owner 可以调低乘数，不能调高；任何人都可以付款增押，抵扣欠费后的剩余金额提高额度。
 
 当一笔买入同时减少买方顺差和卖方逆差，两者重叠的部分进入买方的延迟顺差。它仍然占用额度、仍然阻止退押，并按押金和时间线性释放。这样可以防止机器人把大量账户的顺差和逆差互相抵消，一次性释放押金。
 
-押金分两步取回：净余额不大于零且延迟顺差为零时，Account Owner 申请退押，账户立即冻结，180 天后领取本金。治理也可以踢出账户：从押金中最多罚没等于有效顺差的金额给 Vault，其余退给 Account Owner。
+押金分两步取回：结算费用后，净余额不大于零、延迟顺差和欠费均为零时，Account Owner 可以申请退押。账户立即冻结，180 天后领取剩余本金。治理也可以踢出账户：从押金中最多罚没等于有效顺差的金额给 Vault，其余退给 Account Owner。
 
 ### 席位与治理
 
@@ -85,7 +85,7 @@ forge test
 
 `script/Deploy.s.sol` 展示代理、两侧选举、Timelock、Governor、Market、Vault 与执行器的完整部署和权限移交。`script/DeployMock.s.sol` 用于本地 6 位小数测试代币。部署脚本会读取私钥与结算代币地址，并写回 `.env` 中的合约地址；运行前应审查目标链和环境变量。如果把 `DEPLOYMENT_OUTPUT` 设为 `deployments/` 下的路径前缀（例如 `deployments/local`），两个脚本会改为写入 `<前缀>.mock.json` 和 `<前缀>.json`，不再读写 `.env`。`script/Interact.s.sol` 当前是注释掉的旧示例，不能当作现行交互接口。
 
-源码、接口和测试是行为依据；本文是阅读入口。当前实现是单一结算代币的独立 Market，没有多币种路由或顺差持有费。
+当前实现是单一结算代币的独立 Market。治理可设置顺差持有费，初始费率为 0%。
 
 ## 5. 免责声明
 
